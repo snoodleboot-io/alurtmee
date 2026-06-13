@@ -1,0 +1,10 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Session files (per .claude conventions: gitignored, never committed)
+.prompticorn/sessions/
+
+# OS / editor
+.DS_Store
+*.swp

@@ -1,7 +1,8 @@
 # PHASE 0 — Skeleton / Scaffold (Multiagent Execution Plan)
 
-**Status:** Draft (awaiting approval) · **References:** [MASTER.md](./MASTER.md)
-**Goal:** Stand up the Cargo workspace (5 crates), cross-OS CI, `tracing`, and an empty Iced
+**Status:** Draft (awaiting approval) · **References:** [MASTER.md](./MASTER.md) · scope per
+[MASTER Revisions R2b](./MASTER.md#revisions) (**Linux-only v1**)
+**Goal:** Stand up the Cargo workspace (5 crates), **Linux** CI, `tracing`, and an empty Iced
 window — plus ratify the test/convention gaps MASTER flagged. No GitHub integration yet.
 
 **Exit criteria:** `cargo build`, `cargo fmt --check`, `cargo clippy -D warnings`, and
@@ -37,7 +38,7 @@ flowchart TD
     FORK --> L1["Lane W: workspace root\n(code-agent)\nCargo.toml workspace, .gitignore, rust-toolchain"]
     FORK --> L2["Lane C: crate skeletons\n(code-agent → spawns 5 subagents)"]
     FORK --> L3["Lane O: observability\n(observability-agent)\ntracing + subscriber"]
-    FORK --> L4["Lane CI: CI config\n(devops-agent)\n3-OS GitHub Actions"]
+    FORK --> L4["Lane CI: CI config\n(devops-agent)\nLinux GitHub Actions (R2b)"]
     FORK --> L5["Lane T: test scaffolding + conventions\n(test-agent ATDD+TDD hats)"]
     FORK --> L6["Lane D: fill convention TODOs\n(plan + architect agents)"]
 
@@ -70,7 +71,7 @@ flowchart TD
 | crate:poller | code-agent | lib skeleton | AD-7 | compiling `poller` | — | workspace-root |
 | crate:app | code-agent | bin + **empty Iced window that runs** | AD-2 | runnable `app` | real `iced::run`, no `todo!()` | workspace-root |
 | observability | observability-agent | `tracing` init + `tracing-subscriber` env filter in `app` | — | logging works | no secrets in logs | crate:app |
-| ci-config | devops-agent | GH Actions: build+fmt+clippy+test matrix (ubuntu/macos/windows) + xvfb step | §2 | `.github/workflows/ci.yml` | YAML lint clean | workspace-root |
+| ci-config | devops-agent | GH Actions: build+fmt+clippy+test on **ubuntu only** (R2b) + xvfb step; structured so adding mac/win runners later is a matrix addition | §2 | `.github/workflows/ci.yml` | YAML lint clean | workspace-root |
 | atdd-scaffold | test-agent (ATDD) | acceptance harness + "app launches" scenario | §7 | `tests/` acceptance skeleton + 1 live smoke | §7 patterns | crate:app |
 | tdd-scaffold | test-agent (TDD) | per-crate `#[cfg(test)]` smoke + wiremock dev-dep wired | §7 | passing trivial tests per crate | §7 patterns | crate:* |
 | conventions-fill | plan-agent + architect-agent | fill `core-conventions` TODOs (repo structure, error pattern, commit style=Conventional, PR size) | general.md, ARD | updated convention docs (flagged for ratification) | demonstrate fit (§3.6) | — |

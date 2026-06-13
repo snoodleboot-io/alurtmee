@@ -136,7 +136,7 @@ testable `domain` from I/O.
 | GraphQL (deferred) | `graphql_client` or `cynic` | only if AD-3 enrichment needs it |
 | DB | `rusqlite` (bundled) | zero system dep |
 | Secrets | `keyring` | OS keychain |
-| Notifications | `notify-rust` (+ mac backend) | optional feature |
+| Notifications | `notify-rust` (Linux/XDG backend for v1) | optional feature; mac/win backends post-v1 |
 | Config dirs | `directories` | |
 | Serde/config | `serde`, `serde_json`, `toml` | |
 | Logging | `tracing`, `tracing-subscriber` | |
@@ -146,6 +146,36 @@ testable `domain` from I/O.
 
 ## AD-9 — Deferred / revisit
 
+- **macOS/Windows support (R2b)** — v1 is **Linux only**. Deferred to a post-v1 **Phase 8**
+  (packaging + notification backends + CI runners + signing). See AD-10 for the portability
+  discipline that keeps this additive.
 - GraphQL enrichment (AD-3) — adopt when REST volume warrants.
 - GitHub Enterprise base URL, multi-account, tray icon (PRD OQ2), write actions — post-v1.
-- `sqlx` vs `rusqlite`, `notify-rust` mac backend specifics — revisit at Phase 5.
+- `sqlx` vs `rusqlite` — revisit if async pressure appears.
+
+## AD-10 — Linux-first with portability seams (R2b)
+
+**Decision:** Build for Linux now, but isolate every platform-specific surface behind a trait or
+`#[cfg]` seam so mac/win is additive, not a rewrite.
+
+**Seams:** secrets (`keyring` is already cross-platform), **notifications** (a `Notifier` trait;
+Linux/XDG impl via `notify-rust` now), **packaging** (per-OS lanes), **windowing** (Iced/wgpu is
+cross-platform; avoid Linux-only window APIs). No Linux-only assumptions leak into `domain`,
+`gh-client`, `store`, or `poller` (those are already platform-agnostic).
+
+**Why:** the only genuinely OS-specific work is notifications delivery and packaging; everything
+else is portable by construction. A thin trait at that boundary defers the cost without polluting
+the core. Tradeoff: one extra abstraction at the notifier boundary now, paid back at Phase 8.
+
+## AD-11 — Mock-first dev, deferred live verification (R2a)
+
+**Decision:** Develop and test against `wiremock` + **recorded real fixtures** with **no PAT**;
+defer live `api.github.com` integration verification to a standalone PAT-gated pass
+(exec/MASTER §10).
+
+**Why:** lets work start with zero secrets and keeps CI hermetic/fast. Fixtures are *recorded
+real payloads* (not invented stubs), so parsers/classifiers are exercised against true shapes.
+
+**Tradeoff (explicit):** until the deferred pass runs, the product is **logic-complete but not
+live-verified** — fixtures can drift from API reality. Mitigated by the §10 pass re-running the
+same tests live and refreshing fixtures, with divergences treated as findings.

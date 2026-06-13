@@ -10,6 +10,27 @@ phase-specific manifest, execution map, subagents, and verification.
 
 ---
 
+## Revisions
+
+**R2 (2026-06-13) — two approved scope changes that override conflicting text below:**
+
+- **R2a — Mock-first development; live integration verification deferred.** Per user choice, we
+  develop and test against **`wiremock` + recorded real fixtures**, with **no GitHub PAT yet**.
+  This is a deliberate, approved **deviation from §5 "integrations real & verified"**: each phase
+  reaches **"logic-complete / contract-verified against recorded fixtures"** now; the
+  **live integration-verification step is deferred** to a later *Integration Verification pass*
+  that runs once a PAT is supplied (see §10). No phase is "integration-verified" in the interim,
+  and that is stated explicitly at each gate — not hidden. The env-setup gate's PAT/network items
+  are replaced by **mock-server + fixtures readiness** until then.
+- **R2b — Linux-only v1; portability preserved.** Windows/macOS are **post-v1**. v1 CI,
+  packaging (AppImage/.deb), and notifications target Linux only. Platform-specific surfaces
+  (keychain, notifications, packaging, windowing) stay **behind traits / cfg seams** so adding
+  mac/win later is additive, not a rewrite. Phase 7 is Linux-only; a future Phase 8 covers mac/win.
+
+R1 = original issue of MASTER + PHASE-0..7.
+
+---
+
 ## 0. Execution model (how "genuinely parallel" works here)
 
 The `.claude/agents/*` files are **prompt-personas, not running daemons**. In this harness,
@@ -85,33 +106,46 @@ Phase docs carry the concrete manifest.
 ## 5. Implementation standards (Step 5, binding)
 
 - **Integrations real & verified** end-to-end; "compiles" / "unit test vs mock passes" ≠ verified.
-  Unverifiable integration = blocker.
-- **Tests non-negotiable**: ATDD at acceptance, TDD at unit+integration; they must **run and
-  pass live**, exercise edge/failure paths.
-- **No stubs** (per §3.4).
+  **R2a deviation:** during mock-first dev this is satisfied interim by **contract tests against
+  recorded *real* fixtures** (captured from live GitHub once, checked into `tests/fixtures/`), and
+  the true live verification is **deferred to the §10 Integration Verification pass** when a PAT
+  exists. Each gate states "live verification: DEFERRED (R2a)".
+- **Tests non-negotiable**: ATDD at acceptance, TDD at unit+integration; they must **run and pass**
+  (against the mock server / fixtures while PAT-less), exercise edge/failure paths.
+- **No stubs** (per §3.4) — fixtures are real recorded payloads, not invented stubs; production
+  code paths are fully implemented (only the *remote* is replayed).
 - **Understand before applying** (per §3.6).
 
 ## 6. Global gap & blocker report (Step 9, cross-phase)
 
-| # | Gap / blocker | Phase(s) | Owner | Fallback / resolution |
-|---|---|---|---|---|
-| B1 | **Fine-grained GitHub PAT** — cannot be minted by pipeline | 1–7 | you | You create + paste once at Phase-1 gate; stored in keychain. Hard blocker until provided. |
-| B2 | **Representative GitHub fixtures** (PRs incl. bot/security, comments, CI runs) | 2–6 | you + devops | Designate a sandbox repo you own; else use named public repos read-only. Flag if absent. |
-| B3 | **Linux Secret Service** for `keyring` | 1+ | devops | Start `dbus` + `gnome-keyring-daemon` headless; CI fallback = `keyring` mock/file backend for unit tests only (integration still needs real). |
-| B4 | **Linux notification daemon** for `notify-rust` | 5 | devops | Start dbus + a notif daemon; headless CI = dbus-mock assertion + 1 real-desktop manual-equivalent run owned by pipeline. |
-| B5 | **Headless GPU/display** for Iced (wgpu) | 0,6,7 | devops | `xvfb` + llvmpipe/software adapter for CI smoke; document. |
-| B6 | **Apple Developer ID + Windows signing cert** | 7 | you | Notarization/signing blocked until certs provided; pipeline still produces *unsigned* artifacts and flags the gap. |
-| B7 | **Missing test conventions** (`rust.md` Testing = TODO) | 0+ | test-agent | §7 defines them as a Phase-0 deliverable for your ratification. |
-| B8 | **Empty `core-conventions` TODOs** (error pattern, commit style, repo structure) | 0 | plan/architect | Phase-0 fills them from ARD + Rust norms; flagged for ratification. |
+| # | Gap / blocker | Phase(s) | Owner | Status under R2 | Resolution |
+|---|---|---|---|---|---|
+| B1 | **Fine-grained GitHub PAT** — cannot be minted by pipeline | 1–6 | you | **Deferred (R2a)** — not blocking dev | Dev proceeds mock-first; live integration verification (§10) waits for a PAT whenever you choose to provide one. |
+| B2 | **Representative GitHub data** | 2–6 | devops | **Replaced (R2a)** | Use **recorded real fixtures** captured once into `tests/fixtures/` (incl. a 304 case and a changed case). Live sandbox deferred with B1. |
+| B3 | **Linux Secret Service** for `keyring` | 1+ | devops | Active | Pipeline starts `dbus` + `gnome-keyring-daemon`; keychain tested with a **dummy token** (no real PAT needed). |
+| B4 | **Linux notification daemon** for `notify-rust` | 5 | devops | Active (Linux only) | dbus + notif daemon; verified via dbus-mock + dev-desktop. Notifications need no PAT (fed by fixtures). |
+| B5 | **Headless GPU/display** for Iced (wgpu) | 0,6,7 | devops | Active | `xvfb` + llvmpipe software adapter for CI smoke. |
+| ~~B6~~ | ~~Apple/Windows signing certs~~ | ~~7~~ | — | **Out of v1 (R2b)** | macOS/Windows deferred to post-v1 Phase 8; no certs needed for Linux v1. |
+| B7 | **Missing test conventions** (`rust.md` Testing = TODO) | 0+ | test-agent | Active | §7 defines them as a Phase-0 deliverable for your ratification. |
+| B8 | **Empty `core-conventions` TODOs** | 0 | plan/architect | Active | Phase-0 fills from ARD + Rust norms; flagged for ratification. |
+
+**Scope (R2b):** v1 = **Linux only**. mac/win packaging, notification backends, and CI runners
+move to a future **Phase 8**; code keeps platform seams so that phase is additive.
 
 ## 7. Test strategy framework (Step 7) — *fills the `rust.md` Testing TODO (provisional)*
 
 - **Unit (TDD):** `#[cfg(test)] mod tests` co-located in each module. Pure `domain` logic gets
   exhaustive table-driven tests. HTTP-touching unit tests use **`wiremock`** (a local mock
   server) — allowed at the *unit* level only.
-- **Integration:** `crate/tests/*.rs`. Cross-crate behavior. HTTP integration tests run against
-  **real `api.github.com`** (gated on B1/B2) — this is the integration-verification evidence,
-  not a mock.
+- **Integration (R2a, two-stage):** `crate/tests/*.rs`. Cross-crate behavior. **Stage 1 (now):**
+  run against **recorded real fixtures** replayed by `wiremock` — captured from live GitHub once
+  and committed to `tests/fixtures/` (these are real payloads, not invented). **Stage 2
+  (deferred):** the same tests re-run against **real `api.github.com`** in the §10 pass once a PAT
+  exists — that is the true integration-verification evidence.
+- **Fixture capture:** a one-time `xtask`/script records the needed responses (PR list incl. a
+  304, reviews, comments, check-runs, actions runs) using *any* token at capture time, scrubs
+  secrets, and commits them. Until then, agreed representative fixtures are authored from GitHub's
+  documented schemas and replaced with recorded ones at first capture.
 - **Acceptance (ATDD):** scenarios authored *before* code by the ATDD subagent, expressed as
   end-to-end checks (e.g. driving the poller + store and asserting observable outcomes; UI
   acceptance via headless smoke + state assertions).
@@ -137,6 +171,23 @@ Phase docs carry the concrete manifest.
 ## 9. Per-phase gate (aggregation, generic)
 
 orchestrator-agent collects lane outputs → checks interface consistency → runs the full
-test+lint+coverage suite live → enforcement-agent verifies conventions + no-stub +
-understanding-demonstrated → security-agent reviews boundary-touching phases → **gate passes
-only if all green**, then the phase's exit criteria are confirmed and the session file updated.
+test+lint+coverage suite (against fixtures under R2a) → enforcement-agent verifies conventions +
+no-stub + understanding-demonstrated → security-agent reviews boundary-touching phases → **gate
+passes only if all green**, then the phase's exit criteria are confirmed and the session file
+updated. Each gate explicitly records **"live integration verification: DEFERRED (R2a)"** for
+GitHub-touching phases.
+
+## 10. Integration Verification pass (R2a — deferred, PAT-gated)
+
+A standalone pass, runnable at any time **once you provide a PAT**, that converts every deferred
+"Stage 2" verification into real evidence — without re-doing feature work:
+
+1. env-setup obtains the PAT (keychain) + confirms a (sandbox or public) repo with the needed data.
+2. Re-run each GitHub-touching phase's **integration tests against `api.github.com`**: live auth
+   (P1), live 304 + `X-RateLimit-Remaining` unchanged + change-detect (P2), three enrichment
+   families (P3), classifier inputs `/pulls/{n}/files` + advisory (P4), Actions timing (P5).
+3. Capture/refresh `tests/fixtures/` from the real responses so Stage-1 tests track reality.
+4. Any divergence between fixtures and live = a finding routed to debug-agent (MASTER §8); if it
+   implies an interface/semantic change, **pause + re-present** (§3.7).
+
+Until this pass runs, the product is **logic-complete but not live-verified**, and we say so.

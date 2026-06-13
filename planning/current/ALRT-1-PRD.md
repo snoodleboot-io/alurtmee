@@ -40,10 +40,13 @@ who has a GitHub account and works across one or more orgs/repos.
 - **Limit scope** to chosen organizations and repositories.
 - **Low system impact**, with a **modern feel**.
 - **Local-only**, honoring the privacy invariant.
+- **Linux v1**, with code kept portable so macOS/Windows are an additive follow-on.
 
 ## 5. Non-Goals (v1)
 
 - No webhook/server mode.
+- **No macOS/Windows in v1** — Linux only; mac/win deferred to a post-v1 phase (platform-specific
+  surfaces stay behind seams so the port is additive).
 - No GitHub Enterprise (custom base URL) — deferred.
 - No multi-account — single account in v1 (architecture leaves room).
 - No cross-device sync of read/seen state (violates privacy invariant; local-only).
@@ -96,7 +99,8 @@ who has a GitHub account and works across one or more orgs/repos.
   polls cost no rate limit; redraw only on state change; adaptive poll cadence (faster focused,
   slower backgrounded).
 - NFR3 **Modern feel**: clean, responsive UI; clear visual hierarchy.
-- NFR4 **Cross-platform**: Linux, macOS, Windows.
+- NFR4 **Platform**: Linux for v1; code stays cross-platform-clean (platform specifics behind
+  traits/`cfg`) so macOS/Windows are an additive post-v1 phase.
 - NFR5 **Resilience**: respect `X-Poll-Interval`, exponential backoff + jitter on errors/limits;
   survive restarts (persisted ETags → immediate cheap re-sync).
 - NFR6 **Privacy** per §2.
@@ -119,9 +123,13 @@ who has a GitHub account and works across one or more orgs/repos.
 | 2 Poller core | Conditional-request polling of open PRs; cheap refresh (304s) |
 | 3 Enrichment | Reviews, comments, check-runs/test results in the feed |
 | 4 Classification | Human/bot + layered feature/security, with correction |
-| 5 CI timing + alerts | Baselines, slow-CI flag, native notifications |
+| 5 CI timing + alerts | Baselines, slow-CI flag, native notifications (Linux) |
 | 6 Filters + polish | Composable filter chips, adaptive cadence, settings UI |
-| 7 Packaging | Per-OS installable artifacts |
+| 7 Packaging | **Linux** installable artifacts (AppImage/.deb) |
+| 8 (post-v1) | macOS/Windows packaging + notification backends |
+
+> **Dev mode (R2a):** built mock-first against recorded GitHub fixtures with **no PAT**; live
+> integration verification is a deferred pass run when a PAT is provided. See exec/MASTER §10.
 
 ## 10. Open Questions
 

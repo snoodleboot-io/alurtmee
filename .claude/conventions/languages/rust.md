@@ -3,11 +3,11 @@
 {%- import 'macros/coverage_targets.jinja2' as coverage -%}
 # Core Conventions Rust
 
-Language:             {{ language }} e.g., Rust 1.75
-Runtime:              {{ runtime }} e.g., Native, WASM
-Package Manager:      {{ package_manager }} e.g., Cargo
-Linter:               {{ linter }} e.g., Clippy
-Formatter:           {{ formatter }} e.g., rustfmt
+Language:             Rust 1.95 (stable, pinned via rust-toolchain.toml)
+Runtime:              Native
+Package Manager:      Cargo (workspace)
+Linter:               Clippy (`-D warnings`)
+Formatter:           rustfmt
 
 ### Naming Conventions
 
@@ -40,6 +40,28 @@ Environment vars:   UPPER_SNAKE_CASE always
 
 ### Testing
 
-[Dynamic content - see template]
+Test framework for this project (transcribed from [exec/MASTER §7](../../../planning/current/exec/MASTER.md)):
 
-TODO
+- **Unit (TDD):** `#[cfg(test)] mod tests` co-located in each module. Pure `domain` logic gets
+  exhaustive **table-driven** tests. HTTP-touching unit tests use **`wiremock`** (a local mock
+  server) — allowed at the *unit* level only.
+- **Integration (R2a, two-stage):** `crate/tests/*.rs`, exercising cross-crate behavior.
+  - *Stage 1 (now):* run against **recorded real fixtures** replayed by **`wiremock`** —
+    captured from live GitHub once and committed to `tests/fixtures/` (real payloads, not
+    invented stubs).
+  - *Stage 2 (deferred):* the same tests re-run against **real `api.github.com`** in the
+    deferred Integration Verification pass once a **PAT** exists — that is the true
+    integration-verification evidence (R2a).
+- **Fixture capture:** a one-time `xtask`/script records the needed responses (PR list incl. a
+  304, reviews, comments, check-runs, actions runs), scrubs secrets, and commits them. Until
+  capture, representative fixtures are authored from GitHub's documented schemas and replaced
+  with recorded ones at first capture.
+- **Acceptance (ATDD):** scenarios authored **before** code, expressed as end-to-end checks
+  (e.g. driving the poller + store and asserting observable outcomes). **UI acceptance via
+  headless smoke** + state assertions.
+- **Coverage:** **`cargo-llvm-cov`**; target **≥ 80% meaningful** on
+  `domain` / `gh-client` / `store` / `poller`. **UI is exempt from the line target** (covered by
+  acceptance smokes). Coverage is evidence, not the goal.
+- **Lint/format gates (every lane):** `cargo fmt --check`, `cargo clippy -- -D warnings`.
+
+**Ratified in Phase 0 (B7 closed).**

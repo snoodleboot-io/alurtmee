@@ -1,0 +1,18 @@
+[package]
+name = "gh-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# GitHub auth + REST/conditional requests (ARD AD-3/AD-4). Phase 0 ships the type skeleton only;
+# `reqwest` and conditional-request logic land in Phase 1 (kept out now per scope discipline).
+[dependencies]
+thiserror = { workspace = true }
+
+# Wired for Phase 1 HTTP contract tests; no HTTP-touching test exists yet (no client until Phase 1).
+[dev-dependencies]
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

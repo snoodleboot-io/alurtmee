@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gh-client",
+    "crates/domain",
+    "crates/store",
+    "crates/poller",
+    "crates/app",
+]
+
+# Shared metadata applied to every workspace member via `package.*.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "local"
+authors = ["Alurtmee contributors"]
+
+# Centralised dependency versions (ARD AD-8). Members opt in with `dep = { workspace = true }`.
+# Only deps actually consumed in Phase 0 are wired into crates; the rest are declared here so
+# later phases reference them without re-pinning versions.
+[workspace.dependencies]
+# core / used now
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+iced = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# declared for later phases (AD-8) — not yet consumed
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = "3"
+directories = "5"
+toml = "0.8"
+notify-rust = "4"
+# dev-deps
+wiremock = "0.6"
+
+# Deny-warnings posture (workspace-wide). `unsafe_code` forbidden by construction; the full
+# `-D warnings` gate is enforced in CI via `cargo clippy -- -D warnings`.
+[workspace.lints.rust]
+unsafe_code = "forbid"

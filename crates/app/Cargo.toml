@@ -1,0 +1,21 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Iced UI + binary (ARD AD-2). Phase 0 ships a real, runnable empty window; the poller→store→UI
+# wiring and native notifications land in later phases. `tracing` init is added by the
+# observability lane.
+[[bin]]
+name = "alurtmee"
+path = "src/main.rs"
+
+[dependencies]
+iced = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

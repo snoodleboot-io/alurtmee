@@ -1,0 +1,15 @@
+[package]
+name = "store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# SQLite cache / ETags / CI baselines / config + keychain wrapper (ARD AD-6). `rusqlite` is wired
+# now (bundled SQLite = zero system dependency); the schema is introduced in a later phase.
+[dependencies]
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

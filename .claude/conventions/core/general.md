@@ -273,32 +273,31 @@ For language-specific rules, see: core-conventions-ts.md, core-conventions-py.md
 
 All mode-specific rules inherit from this file.
 
+> **Note:** The values below were filled in Phase 0 from the [ARD](../../../planning/current/ALRT-1-ARD.md) and **ratified (B8 closed)**.
+
 ## Repository Structure
 
-Repository type: TODO
+Repository type: **Single-language — Rust Cargo workspace (multi-crate)**. Primary language: **Rust**.
 
 ### If single-language:
-Include: core-conventions-[LANG].md where [LANG] matches your primary language
-
-### If multi-language-monorepo:
-Define each language area:
-- /frontend      → include: Core Conventions TypeScript
-- /backend       → include: Core Conventions Python
-- /shared        → include: Core Conventions Golang
-
-### If mixed-collocation:
-File extension determines which rules apply:
-- *.ts, *.tsx   → TypeScript rules
-- *.py           → Python rules
-- *.go           → Go rules
+Include: Core Conventions Rust (`.claude/conventions/languages/rust.md`) — primary language is Rust.
 
 ## File & Folder Structure
 
-src/
-└── TODO
+```
+alurtmee/
+├── Cargo.toml            # workspace manifest
+├── rust-toolchain.toml   # pinned toolchain
+└── crates/
+    ├── gh-client/        # auth, REST + conditional requests, optional GraphQL, rate-limit / X-Poll-Interval (ARD AD-7)
+    ├── domain/           # pure types + classifiers (Author, Category, Item, filters); no I/O (ARD AD-7)
+    ├── store/            # SQLite cache / ETags / baselines / config; keychain wrapper (ARD AD-7)
+    ├── poller/           # async scheduler + diff / change-detection; emits domain events (ARD AD-7)
+    └── app/              # Iced UI + binary; wires poller→store→UI; native notifications (ARD AD-7)
+```
 
-Rule: One export per file unless it is a barrel (index.ts).
-Rule: Co-locate tests with source (auth.ts → auth.test.ts).
+Rule: One type per file (see Class Organization Rules below).
+Rule: Co-locate unit tests with source via `#[cfg(test)] mod tests`; cross-crate integration tests live in `crate/tests/*.rs`.
 
 ### Class Organization Rules
 
@@ -347,7 +346,9 @@ All OOP components must follow SOLID principles:
 
 ## Error Handling
 
-Pattern: TODO
+Pattern: **`thiserror` typed error enums in library crates; `anyhow` (with `.context(...)`) at the binary/app boundary; `Result<T, E>` everywhere; never panic in library code.**
+
+> *Fit:* Library crates (`gh-client`, `domain`, `store`, `poller`) export precise `thiserror` enums so callers can match and recover on specific failure modes; the `app` binary, where errors terminate in a log/UI surface rather than recovery, uses `anyhow` to collect context cheaply without hand-rolling a top-level error type. This keeps libraries match-able and the boundary ergonomic (per ARD + Rust conventions).
 
 - Never swallow errors silently
 - Always include context: Error("failed to fetch user: " + userId)
@@ -371,20 +372,20 @@ Testing conventions are language-specific. See your language's conventions file 
 
 ## Database
 
-Database:            TODO           e.g., PostgreSQL, DynamoDB
-ORM/Query:           TODO                e.g., Prisma, SQLAlchemy, GORM
+Database:            **SQLite via `rusqlite` (bundled — zero system dependency)** (ARD AD-6)
+ORM/Query:           **None — hand-written SQL via `rusqlite`** (ARD AD-6)
 
 ## Git & PR Conventions
 
 Branch naming:       feat|fix|chore|docs / ticket-id - short-description
 MANDATORY WITHOUT EXCEPTION: Ticket IDs MUST be real and obtained from user-provided files, actual project tickets, or the feature request. 
 DO NOT hallucinate, invent, or use fake ticket IDs like "PROJ-123" or "#456" unless they are explicitly provided in the user's request or associated project documentation.
-Commit style:        TODO  e.g., Conventional Commits, free-form
-PR size:             TODO lines changed (soft limit)
+Commit style:        **Conventional Commits** (e.g. `feat(domain): ...`, `chore(ci): ...`)
+PR size:             **~400 lines changed (soft limit)**
 
 ## Deployment
 
-Target:              TODO  e.g., AWS Lambda, Vercel, GKE
+Target:              **Linux desktop — AppImage and `.deb` (Phase 7); macOS/Windows deferred to post-v1 Phase 8** (ARD AD-9 / AD-10)
 
 ---
 

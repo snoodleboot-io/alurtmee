@@ -1,0 +1,30 @@
+[
+  {
+    "id": 3001,
+    "name": "platform",
+    "full_name": "acme-engineering/platform",
+    "private": true,
+    "owner": {
+      "login": "acme-engineering",
+      "id": 101010,
+      "type": "Organization"
+    },
+    "description": "Internal platform monorepo",
+    "fork": false,
+    "default_branch": "main"
+  },
+  {
+    "id": 3002,
+    "name": "docs-site",
+    "full_name": "acme-engineering/docs-site",
+    "private": false,
+    "owner": {
+      "login": "acme-engineering",
+      "id": 101010,
+      "type": "Organization"
+    },
+    "description": "Public documentation site",
+    "fork": false,
+    "default_branch": "main"
+  }
+]

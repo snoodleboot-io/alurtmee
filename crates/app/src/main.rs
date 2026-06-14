@@ -1,42 +1,251 @@
 //! Alurtmee desktop application entry point.
 //!
-//! Phase 0 stands up a real, runnable Iced window with no behaviour yet. The poller→store→UI
-//! pipeline and notifications attach in later phases.
+//! Phase 1 ships the **Auth + Scope** settings screen: paste a GitHub personal access token (PAT),
+//! validate it against `GET /user`, list the user's organizations and repositories, and choose a
+//! subset to poll. The token is stored in the OS keychain only; the selection is persisted in
+//! SQLite and restored on the next launch.
 //!
 //! **Why Iced's Elm/`application` model fits here (MASTER §3.6):** Alurtmee is idle most of the
 //! time — it polls on a slow cadence and the UI only needs to change when a poll produces a new
 //! event. Iced is retained-mode and redraws *only in response to a `Message`*, so an idle
-//! dashboard costs ~no CPU between updates (NFR2), unlike an immediate-mode toolkit that repaints
-//! every frame. The unidirectional `state → view → message → update` loop also maps cleanly onto
-//! "poller emits events → state updates → widgets redraw", which is exactly the data flow in
-//! ARD AD-7. That is why this is the right model, not merely "we picked Iced".
+//! dashboard costs ~no CPU between updates (NFR2). The unidirectional `state → view → message →
+//! update` loop maps cleanly onto "poller emits events → state updates → widgets redraw"
+//! (ARD AD-7).
+//!
+//! **Testability:** all auth/scope *logic* lives in [`settings_model::SettingsModel`] (pure,
+//! synchronous, unit-tested) and in the `gh-client`/`store` crates (tested against a wiremock
+//! GitHub server and the real keychain). This `main` is a thin shell that performs the async
+//! GitHub calls and keychain/SQLite effects and feeds results back into the model — it is covered
+//! by the headless window smoke test and the end-to-end acceptance test in `tests/`.
 
+mod settings_model;
 mod telemetry;
 
-use iced::widget::{center, text};
-use iced::Element;
+use directories::ProjectDirs;
+use domain::{AuthState, Org, Repo, User};
+use gh_client::GhClient;
+use iced::widget::{button, checkbox, column, container, scrollable, text, text_input};
+use iced::{Element, Task};
+use store::{Keychain, Store};
 
-/// Application state. Empty in Phase 0; gains the dashboard model in later phases.
-#[derive(Default)]
-struct Alurtmee;
+use crate::settings_model::SettingsModel;
 
-/// Messages that drive state transitions. None exist yet — the window is static in Phase 0.
+/// Default GitHub REST base URL. Overridable via `ALURTMEE_GITHUB_BASE_URL` so the deferred live
+/// Integration Verification pass (and tests) can point at a mock server without code changes.
+const DEFAULT_GITHUB_BASE_URL: &str = "https://api.github.com";
+
+/// The running application: the settings model plus the I/O collaborators it drives.
+struct Alurtmee {
+    model: SettingsModel,
+    keychain: Keychain,
+    store: Store,
+    base_url: String,
+    /// Built once a token is accepted; holds the token internally (redacted in `Debug`).
+    client: Option<GhClient>,
+}
+
+/// Messages that drive state transitions.
+///
+/// Network results carry `String` errors (not `GhError`) so `Message` stays `Clone` — the error is
+/// rendered to the user as text and never needs to be matched on structurally here.
 #[derive(Debug, Clone)]
-enum Message {}
+enum Message {
+    PatInputChanged(String),
+    ValidatePressed,
+    Validated(Result<User, String>),
+    Listed(Result<(Vec<Org>, Vec<Repo>), String>),
+    ToggleRepo(String),
+}
 
 impl Alurtmee {
-    fn update(&mut self, message: Message) {
-        // No messages are produced in Phase 0; this match is exhaustive over an empty enum.
-        match message {}
+    /// Open persistent storage and restore the saved selection. Storage failures are logged and
+    /// fall back to an in-memory store so the window always boots (the smoke test depends on this).
+    fn boot() -> (Self, Task<Message>) {
+        let store = open_store();
+        let selection = store.load_selection().unwrap_or_else(|err| {
+            tracing::error!("failed to load saved selection: {err}");
+            Default::default()
+        });
+        let base_url = std::env::var("ALURTMEE_GITHUB_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_GITHUB_BASE_URL.to_string());
+        let app = Self {
+            model: SettingsModel::new().with_selection(selection),
+            keychain: Keychain::new(),
+            store,
+            base_url,
+            client: None,
+        };
+        (app, Task::none())
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::PatInputChanged(value) => {
+                self.model.pat_input_changed(value);
+                Task::none()
+            }
+            Message::ValidatePressed => {
+                let Some(token) = self.model.start_validating() else {
+                    return Task::none();
+                };
+                // The token is written to the OS keychain here — the only place it is persisted.
+                if let Err(err) = self.keychain.set_token(&token) {
+                    self.model
+                        .validation_failed(format!("Could not store token in keychain: {err}"));
+                    return Task::none();
+                }
+                let client = match GhClient::new(self.base_url.clone(), token) {
+                    Ok(client) => client,
+                    Err(err) => {
+                        self.model
+                            .validation_failed(format!("Could not build GitHub client: {err}"));
+                        return Task::none();
+                    }
+                };
+                self.client = Some(client.clone());
+                Task::perform(
+                    async move { client.validate().await.map_err(|err| err.to_string()) },
+                    Message::Validated,
+                )
+            }
+            Message::Validated(Ok(user)) => {
+                self.model.validation_succeeded(user);
+                let Some(client) = self.client.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        let orgs = client.list_orgs().await.map_err(|err| err.to_string())?;
+                        let repos = client
+                            .list_user_repos()
+                            .await
+                            .map_err(|err| err.to_string())?;
+                        Ok((orgs, repos))
+                    },
+                    Message::Listed,
+                )
+            }
+            Message::Validated(Err(reason)) => {
+                self.model.validation_failed(reason);
+                Task::none()
+            }
+            Message::Listed(Ok((orgs, repos))) => {
+                self.model.loaded_orgs(orgs);
+                self.model.loaded_repos(repos);
+                Task::none()
+            }
+            Message::Listed(Err(reason)) => {
+                self.model.validation_failed(reason);
+                Task::none()
+            }
+            Message::ToggleRepo(full_name) => {
+                let selection = self.model.toggle_repo(&full_name).clone();
+                if let Err(err) = self.store.save_selection(&selection) {
+                    tracing::error!("failed to persist selection: {err}");
+                }
+                Task::none()
+            }
+        }
     }
 
     fn view(&self) -> Element<'_, Message> {
-        center(text("Alurtmee")).into()
+        let pat = text_input("Personal access token", self.model.pat_input())
+            .on_input(Message::PatInputChanged)
+            .secure(true)
+            .padding(8);
+
+        let validate = {
+            let button = button(text("Validate"));
+            if self.model.is_busy() {
+                button
+            } else {
+                button.on_press(Message::ValidatePressed)
+            }
+        };
+
+        let identity = match self.model.auth() {
+            AuthState::Authenticated(user) => format!("Signed in as {}", user.login),
+            AuthState::Invalid(reason) => format!("Not signed in — {reason}"),
+            AuthState::Unauthenticated => "Not signed in".to_string(),
+        };
+
+        let orgs_line = if self.model.orgs().is_empty() {
+            String::new()
+        } else {
+            let logins: Vec<&str> = self
+                .model
+                .orgs()
+                .iter()
+                .map(|org| org.login.as_str())
+                .collect();
+            format!("Organizations: {}", logins.join(", "))
+        };
+
+        let repos: Vec<Element<Message>> = self
+            .model
+            .repos()
+            .iter()
+            .map(|repo| {
+                let full_name = repo.full_name.clone();
+                let checked = self.model.is_selected(&full_name);
+                let label = if repo.private {
+                    format!("{full_name}  (private)")
+                } else {
+                    full_name.clone()
+                };
+                checkbox(label, checked)
+                    .on_toggle(move |_| Message::ToggleRepo(full_name.clone()))
+                    .into()
+            })
+            .collect();
+
+        let content = column![
+            text("Alurtmee — Settings").size(24),
+            text(identity).size(14),
+            text("GitHub personal access token").size(14),
+            pat,
+            validate,
+            text(self.model.status().to_string()),
+            text(orgs_line).size(14),
+            text(format!(
+                "{} repositories selected",
+                self.model.selection().len()
+            ))
+            .size(14),
+            scrollable(column(repos).spacing(4)),
+        ]
+        .spacing(12)
+        .padding(20);
+
+        container(content).into()
     }
+}
+
+/// Open the persistent SQLite store under the platform data directory, falling back to an
+/// in-memory store if the directory or database cannot be opened (so the window still launches).
+fn open_store() -> Store {
+    match data_db_path().and_then(|path| Store::open(&path).ok()) {
+        Some(store) => store,
+        None => {
+            tracing::warn!("falling back to an in-memory store; selection will not persist");
+            Store::open_in_memory().expect("in-memory SQLite store always opens")
+        }
+    }
+}
+
+/// Compute the on-disk database path under the user's data directory, creating the directory.
+fn data_db_path() -> Option<String> {
+    let dirs = ProjectDirs::from("com", "alurtmee", "alurtmee")?;
+    let data_dir = dirs.data_dir();
+    std::fs::create_dir_all(data_dir).ok()?;
+    data_dir
+        .join("alurtmee.sqlite")
+        .to_str()
+        .map(str::to_string)
 }
 
 fn main() -> iced::Result {
     telemetry::init();
     tracing::info!("starting alurtmee");
-    iced::application("Alurtmee", Alurtmee::update, Alurtmee::view).run()
+    iced::application("Alurtmee", Alurtmee::update, Alurtmee::view).run_with(Alurtmee::boot)
 }

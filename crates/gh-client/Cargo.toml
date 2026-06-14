@@ -5,14 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# GitHub auth + REST/conditional requests (ARD AD-3/AD-4). Phase 0 ships the type skeleton only;
-# `reqwest` and conditional-request logic land in Phase 1 (kept out now per scope discipline).
+# GitHub auth + REST client (ARD AD-3/AD-4). Phase 1 introduces the real async transport,
+# pagination, header injection, and response mapping. Mock-first: tests run against `wiremock`.
 [dependencies]
+domain = { path = "../domain" }
 thiserror = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
-# Wired for Phase 1 HTTP contract tests; no HTTP-touching test exists yet (no client until Phase 1).
+# HTTP contract tests run against a `wiremock` server pointed at via the injectable base URL.
 [dev-dependencies]
 wiremock = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

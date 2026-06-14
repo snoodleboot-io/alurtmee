@@ -1,0 +1,16 @@
+[
+  {
+    "login": "acme-engineering",
+    "id": 101010,
+    "node_id": "MDEyOk9yZ2FuaXphdGlvbjEwMTAxMA==",
+    "url": "https://api.github.com/orgs/acme-engineering",
+    "description": "Acme core engineering"
+  },
+  {
+    "login": "octo-labs",
+    "id": 202020,
+    "node_id": "MDEyOk9yZ2FuaXphdGlvbjIwMjAyMA==",
+    "url": "https://api.github.com/orgs/octo-labs",
+    "description": "Experimental octo projects"
+  }
+]

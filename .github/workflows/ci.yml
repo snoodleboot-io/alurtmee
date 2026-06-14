@@ -32,7 +32,9 @@ jobs:
             libx11-dev \
             libgl1-mesa-dev \
             mesa-vulkan-drivers \
-            xvfb
+            xvfb \
+            gnome-keyring \
+            dbus-x11
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -51,8 +53,14 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets
 
+      # Phase 1 introduces a live OS-keychain test (store::Keychain against the Secret Service).
+      # Headless CI has no keyring, so we start a private D-Bus session and an unlocked
+      # gnome-keyring `secrets` component for the test run (MASTER B3 / PHASE-1 §2 env gate).
       - name: Test
-        run: cargo test --workspace
+        run: |
+          dbus-run-session -- bash -c '
+            echo "ci-keyring-pass" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test --workspace'
 
       - name: Headless window smoke
         env:
@@ -66,4 +74,7 @@ jobs:
 
       - name: Coverage (informational)
         continue-on-error: true
-        run: cargo llvm-cov --workspace --summary-only
+        run: |
+          dbus-run-session -- bash -c '
+            echo "ci-keyring-pass" | gnome-keyring-daemon --unlock --components=secrets
+            cargo llvm-cov --workspace --summary-only'

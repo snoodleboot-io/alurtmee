@@ -1,13 +1,13 @@
 //! `gh-client` — GitHub API access for Alurtmee.
 //!
-//! Owns auth, REST + conditional (ETag/If-None-Match) requests, rate-limit / `X-Poll-Interval`
-//! handling, and optional GraphQL enrichment (ARD AD-3/AD-4). Phase 0 establishes the crate seam
-//! and error type; the HTTP client (`reqwest`) and request logic are introduced in Phase 1.
-
-// `wiremock` is wired as a dev-dependency for Phase 1 HTTP contract tests (no HTTP client yet).
+//! Owns auth, REST requests, pagination, and rate-limit handling (ARD AD-3/AD-4). Mock-first:
+//! the base URL is injectable so tests drive the client against a `wiremock` server with no live
+//! network and no real token. GitHub's JSON is mapped through a private wire/anti-corruption layer
+//! ([`wire`]) so the pure `domain` types never depend on GitHub's schema quirks.
 
 mod client;
 mod error;
+mod wire;
 
 pub use client::GhClient;
 pub use error::GhError;

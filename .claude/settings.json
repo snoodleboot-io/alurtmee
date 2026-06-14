@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "Bash(exit 1)",
-      "Bash(git init *)"
+      "Bash(git init *)",
+      "Bash(rustup component *)",
+      "Bash(cargo install *)",
+      "Bash(sudo -n apt-get install -y xvfb mesa-utils)",
+      "Bash(cargo llvm-cov *)",
+      "Bash(cargo watch *)",
+      "Bash(cargo build *)",
+      "Bash(echo \"APP_BUILD_EXIT=$?\")",
+      "Bash(python3 -c \"import yaml,sys; d=yaml.safe_load\\(open\\('/home/john_aven/Documents/software/alurtmee/.github/workflows/ci.yml'\\)\\); print\\('YAML valid'\\); print\\('steps:', len\\(d['jobs']['ci']['steps']\\)\\); print\\('matrix:', d['jobs']['ci']['strategy']['matrix']['os']\\); print\\('runs-on:', d['jobs']['ci']['runs-on']\\)\")",
+      "Bash(cargo fmt *)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy *)",
+      "Bash(echo \"FMT_EXIT=$?\")",
+      "Bash(dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames)",
+      "Bash(echo \"BUILD_EXIT=$?\")"
     ]
   }
 }

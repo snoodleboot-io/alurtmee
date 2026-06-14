@@ -5,11 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# SQLite cache / ETags / CI baselines / config + keychain wrapper (ARD AD-6). `rusqlite` is wired
-# now (bundled SQLite = zero system dependency); the schema is introduced in a later phase.
+# SQLite cache / ETags / CI baselines / config + keychain wrapper (ARD AD-6). `rusqlite` backs the
+# non-secret config (bundled SQLite = zero system dependency); the GitHub PAT lives ONLY in the OS
+# keychain via `keyring`, never in SQLite/config/logs.
 [dependencies]
+domain = { path = "../domain" }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
+# Enable the synchronous Linux Secret Service backend with a pure-Rust crypto impl. Features are
+# additive (not a version re-pin); the workspace pins the keyring v3 line in [workspace.dependencies].
+keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

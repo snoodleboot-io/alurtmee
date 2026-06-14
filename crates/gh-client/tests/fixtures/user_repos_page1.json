@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1296269,
+    "name": "hello-world",
+    "full_name": "octocat/hello-world",
+    "private": false,
+    "owner": {
+      "login": "octocat",
+      "id": 583231,
+      "type": "User"
+    },
+    "description": "My first repository",
+    "fork": false,
+    "default_branch": "main"
+  },
+  {
+    "id": 1296270,
+    "name": "secret-plans",
+    "full_name": "octocat/secret-plans",
+    "private": true,
+    "owner": {
+      "login": "octocat",
+      "id": 583231,
+      "type": "User"
+    },
+    "description": "Hush hush",
+    "fork": false,
+    "default_branch": "main"
+  }
+]

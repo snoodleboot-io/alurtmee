@@ -6,10 +6,12 @@
 //! versioned via SQLite `PRAGMA user_version` and migrated on every open.
 
 mod error;
+mod etag_record;
 mod keychain;
 mod migration;
 mod store;
 
 pub use error::StoreError;
+pub use etag_record::EtagRecord;
 pub use keychain::Keychain;
 pub use store::Store;

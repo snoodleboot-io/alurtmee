@@ -7,7 +7,11 @@
 
 mod client;
 mod error;
+mod open_prs_result;
+mod pr_outcome;
 mod wire;
 
 pub use client::GhClient;
 pub use error::GhError;
+pub use open_prs_result::OpenPrsResult;
+pub use pr_outcome::PrOutcome;

@@ -10,10 +10,13 @@
 //! stay clean; GitHub's nesting and extras stop here. One type per file (core conventions).
 
 mod wire_org;
+mod wire_pull_request;
+mod wire_pull_request_user;
 mod wire_repo;
 mod wire_repo_owner;
 mod wire_user;
 
 pub(crate) use wire_org::WireOrg;
+pub(crate) use wire_pull_request::WirePullRequest;
 pub(crate) use wire_repo::WireRepo;
 pub(crate) use wire_user::WireUser;

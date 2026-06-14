@@ -16,8 +16,10 @@ path = "src/main.rs"
 domain = { path = "../domain" }
 gh-client = { path = "../gh-client" }
 store = { path = "../store" }
+poller = { path = "../poller" }
 iced = { workspace = true, features = ["tokio"] }
 directories = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

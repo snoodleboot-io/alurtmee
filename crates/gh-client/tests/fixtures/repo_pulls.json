@@ -1,0 +1,20 @@
+[
+  {
+    "number": 101,
+    "title": "Wire up the poller",
+    "user": { "login": "alice", "id": 10, "type": "User" },
+    "draft": false,
+    "updated_at": "2026-06-14T09:00:00Z",
+    "html_url": "https://github.com/acme-engineering/platform/pull/101",
+    "state": "open"
+  },
+  {
+    "number": 102,
+    "title": "Draft: refactor diff engine",
+    "user": { "login": "bob", "id": 11, "type": "User" },
+    "draft": true,
+    "updated_at": "2026-06-14T10:30:00Z",
+    "html_url": "https://github.com/acme-engineering/platform/pull/102",
+    "state": "open"
+  }
+]

@@ -18,25 +18,37 @@
 //! GitHub calls and keychain/SQLite effects and feeds results back into the model — it is covered
 //! by the headless window smoke test and the end-to-end acceptance test in `tests/`.
 
+mod pr_list_model;
 mod settings_model;
 mod telemetry;
 
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
+
 use directories::ProjectDirs;
-use domain::{AuthState, Org, Repo, User};
+use domain::{AuthState, ChangeEvent, Org, PollCadence, Repo, User};
 use gh_client::GhClient;
 use iced::widget::{button, checkbox, column, container, scrollable, text, text_input};
-use iced::{Element, Task};
+use iced::{Element, Subscription, Task};
+use poller::Poller;
 use store::{Keychain, Store};
 
+use crate::pr_list_model::PrListModel;
 use crate::settings_model::SettingsModel;
 
 /// Default GitHub REST base URL. Overridable via `ALURTMEE_GITHUB_BASE_URL` so the deferred live
 /// Integration Verification pass (and tests) can point at a mock server without code changes.
 const DEFAULT_GITHUB_BASE_URL: &str = "https://api.github.com";
 
+/// Active polling interval (the cadence resets here on a change) and the backed-off idle ceiling.
+const POLL_BASE_INTERVAL: Duration = Duration::from_secs(30);
+const POLL_MAX_INTERVAL: Duration = Duration::from_secs(300);
+
 /// The running application: the settings model plus the I/O collaborators it drives.
 struct Alurtmee {
     model: SettingsModel,
+    /// Open pull requests for the selected repos, maintained from poller change-events.
+    pr_list: PrListModel,
     keychain: Keychain,
     store: Store,
     base_url: String,
@@ -55,6 +67,7 @@ enum Message {
     Validated(Result<User, String>),
     Listed(Result<(Vec<Org>, Vec<Repo>), String>),
     ToggleRepo(String),
+    PollEvent(ChangeEvent),
 }
 
 impl Alurtmee {
@@ -70,6 +83,7 @@ impl Alurtmee {
             .unwrap_or_else(|_| DEFAULT_GITHUB_BASE_URL.to_string());
         let app = Self {
             model: SettingsModel::new().with_selection(selection),
+            pr_list: PrListModel::new(),
             keychain: Keychain::new(),
             store,
             base_url,
@@ -145,7 +159,65 @@ impl Alurtmee {
                 }
                 Task::none()
             }
+            Message::PollEvent(event) => {
+                self.pr_list.apply(event);
+                Task::none()
+            }
         }
+    }
+
+    /// Run the background poller while authenticated with a non-empty selection; otherwise stay
+    /// idle (no network). The subscription identity is derived from the selected repos, so changing
+    /// the selection restarts the poller with the new set and signing out stops it. The poller owns
+    /// its own client (token read from the keychain) and store connection, and streams change
+    /// events back as [`Message::PollEvent`].
+    fn subscription(&self) -> Subscription<Message> {
+        if !self.model.auth().is_authenticated() {
+            return Subscription::none();
+        }
+        let repos: Vec<String> = self.model.selection().iter().map(str::to_string).collect();
+        if repos.is_empty() {
+            return Subscription::none();
+        }
+        let base_url = self.base_url.clone();
+        let id = poll_subscription_id(&repos);
+
+        Subscription::run_with_id(
+            id,
+            iced::stream::channel(64, move |mut output| {
+                let repos = repos.clone();
+                let base_url = base_url.clone();
+                async move {
+                    use iced::futures::SinkExt;
+
+                    let Ok(Some(token)) = Keychain::new().get_token() else {
+                        tracing::warn!("poller: no token in keychain; not polling");
+                        return;
+                    };
+                    let client = match GhClient::new(base_url, token) {
+                        Ok(client) => client,
+                        Err(err) => {
+                            tracing::error!("poller: could not build client: {err}");
+                            return;
+                        }
+                    };
+                    let Some(store) = open_store_opt() else {
+                        tracing::error!("poller: could not open store");
+                        return;
+                    };
+                    let cadence = PollCadence::new(POLL_BASE_INTERVAL, POLL_MAX_INTERVAL);
+                    let poller = Poller::new(client, store, cadence);
+
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+                    tokio::spawn(poller.run(repos, tx));
+                    while let Some(event) = rx.recv().await {
+                        if output.send(Message::PollEvent(event)).await.is_err() {
+                            break; // UI dropped the subscription
+                        }
+                    }
+                }
+            }),
+        )
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -199,6 +271,27 @@ impl Alurtmee {
             })
             .collect();
 
+        let pr_header = if self.pr_list.is_empty() {
+            "Open pull requests — none yet".to_string()
+        } else {
+            format!("Open pull requests ({})", self.pr_list.len())
+        };
+
+        let pr_rows: Vec<Element<Message>> = self
+            .pr_list
+            .prs()
+            .iter()
+            .map(|pr| {
+                let draft = if pr.draft { "  · draft" } else { "" };
+                text(format!(
+                    "{}#{}  {}  (@{}){}",
+                    pr.id.repo, pr.id.number, pr.title, pr.author, draft
+                ))
+                .size(14)
+                .into()
+            })
+            .collect();
+
         let content = column![
             text("Alurtmee — Settings").size(24),
             text(identity).size(14),
@@ -213,6 +306,8 @@ impl Alurtmee {
             ))
             .size(14),
             scrollable(column(repos).spacing(4)),
+            text(pr_header).size(18),
+            scrollable(column(pr_rows).spacing(4)),
         ]
         .spacing(12)
         .padding(20);
@@ -224,13 +319,28 @@ impl Alurtmee {
 /// Open the persistent SQLite store under the platform data directory, falling back to an
 /// in-memory store if the directory or database cannot be opened (so the window still launches).
 fn open_store() -> Store {
-    match data_db_path().and_then(|path| Store::open(&path).ok()) {
+    match open_store_opt() {
         Some(store) => store,
         None => {
             tracing::warn!("falling back to an in-memory store; selection will not persist");
             Store::open_in_memory().expect("in-memory SQLite store always opens")
         }
     }
+}
+
+/// Open the persistent store, or `None` if the data dir / database can't be opened. The poller
+/// opens its own connection (SQLite permits concurrent connections to one file) via this helper.
+fn open_store_opt() -> Option<Store> {
+    data_db_path().and_then(|path| Store::open(&path).ok())
+}
+
+/// A stable subscription id for the poller, derived from the selected repos so the subscription is
+/// recreated (poller restarted) exactly when the selection changes.
+fn poll_subscription_id(repos: &[String]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "alurtmee-poller".hash(&mut hasher);
+    repos.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Compute the on-disk database path under the user's data directory, creating the directory.
@@ -247,5 +357,7 @@ fn data_db_path() -> Option<String> {
 fn main() -> iced::Result {
     telemetry::init();
     tracing::info!("starting alurtmee");
-    iced::application("Alurtmee", Alurtmee::update, Alurtmee::view).run_with(Alurtmee::boot)
+    iced::application("Alurtmee", Alurtmee::update, Alurtmee::view)
+        .subscription(Alurtmee::subscription)
+        .run_with(Alurtmee::boot)
 }

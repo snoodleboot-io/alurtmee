@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::StoreError;
+use crate::etag_record::EtagRecord;
 use crate::migration;
 
 /// Config key under which the persisted [`domain::RepoSelection`] JSON is stored.
@@ -77,6 +78,102 @@ impl Store {
             }
         }
     }
+
+    /// Insert or overwrite the cached conditional-request validators for `endpoint`.
+    ///
+    /// Only non-secret response headers are stored — never a token (ARD AD-6).
+    pub fn set_etag(&self, endpoint: &str, record: &EtagRecord) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO etags (endpoint, etag, last_modified) VALUES (?1, ?2, ?3)
+             ON CONFLICT(endpoint) DO UPDATE SET
+                 etag = excluded.etag,
+                 last_modified = excluded.last_modified",
+            params![endpoint, record.etag, record.last_modified],
+        )?;
+        Ok(())
+    }
+
+    /// Read the cached validators for `endpoint`, returning `None` if none are stored.
+    pub fn get_etag(&self, endpoint: &str) -> Result<Option<EtagRecord>, StoreError> {
+        let record = self
+            .conn
+            .query_row(
+                "SELECT etag, last_modified FROM etags WHERE endpoint = ?1",
+                params![endpoint],
+                |row| {
+                    Ok(EtagRecord {
+                        etag: row.get(0)?,
+                        last_modified: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(record)
+    }
+
+    /// Replace the full cached set of open PRs for `repo`.
+    ///
+    /// Runs in a single transaction: every existing row for `repo` is deleted, then `prs` are
+    /// inserted. This gives REPLACE semantics scoped to the repo (other repos are untouched) and is
+    /// atomic — a failed insert rolls the whole swap back. `draft` is persisted as a 0/1 integer.
+    pub fn cache_repo_prs(
+        &mut self,
+        repo: &str,
+        prs: &[domain::PullRequest],
+    ) -> Result<(), StoreError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM pull_requests WHERE repo = ?1", params![repo])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO pull_requests
+                     (repo, number, title, author, draft, updated_at, url)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for pr in prs {
+                stmt.execute(params![
+                    repo,
+                    pr.id.number,
+                    pr.title,
+                    pr.author,
+                    pr.draft as i64,
+                    pr.updated_at,
+                    pr.url,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load all cached open PRs for `repo`, ordered by PR number.
+    ///
+    /// Returns an empty `Vec` for a repo that has never been cached.
+    pub fn load_repo_prs(&self, repo: &str) -> Result<Vec<domain::PullRequest>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT number, title, author, draft, updated_at, url
+             FROM pull_requests
+             WHERE repo = ?1
+             ORDER BY number",
+        )?;
+        let rows = stmt.query_map(params![repo], |row| {
+            let number: u64 = row.get(0)?;
+            let draft: i64 = row.get(3)?;
+            Ok(domain::PullRequest {
+                id: domain::PrId::new(repo, number),
+                title: row.get(1)?,
+                author: row.get(2)?,
+                draft: draft != 0,
+                updated_at: row.get(4)?,
+                url: row.get(5)?,
+            })
+        })?;
+
+        let mut prs = Vec::new();
+        for pr in rows {
+            prs.push(pr?);
+        }
+        Ok(prs)
+    }
 }
 
 #[cfg(test)]
@@ -136,7 +233,7 @@ mod tests {
     fn migration_is_idempotent() {
         let store = Store::open_in_memory().expect("open + migrate");
 
-        // Re-run migration directly; version must stay at v1 and the table must survive.
+        // Re-run migration directly; version must stay current and the tables must survive.
         migration::migrate(store.connection()).expect("second migrate");
         migration::migrate(store.connection()).expect("third migrate");
 
@@ -193,5 +290,169 @@ mod tests {
 
         let err = store.load_selection().expect_err("decode should fail");
         assert!(matches!(err, StoreError::Decode(_)));
+    }
+
+    fn sample_pr(repo: &str, number: u64, draft: bool) -> domain::PullRequest {
+        domain::PullRequest {
+            id: domain::PrId::new(repo, number),
+            title: format!("PR {number}"),
+            author: "octocat".to_string(),
+            draft,
+            updated_at: "2026-06-14T00:00:00Z".to_string(),
+            url: format!("https://github.com/{repo}/pull/{number}"),
+        }
+    }
+
+    #[test]
+    fn etag_round_trip_with_and_without_last_modified() {
+        let store = Store::open_in_memory().expect("open store");
+
+        let full = EtagRecord {
+            etag: Some("\"abc123\"".to_string()),
+            last_modified: Some("Wed, 21 Oct 2026 07:28:00 GMT".to_string()),
+        };
+        store
+            .set_etag("/repos/octocat/hello/pulls", &full)
+            .expect("set full");
+        assert_eq!(
+            store
+                .get_etag("/repos/octocat/hello/pulls")
+                .expect("get full"),
+            Some(full)
+        );
+
+        let etag_only = EtagRecord {
+            etag: Some("\"def456\"".to_string()),
+            last_modified: None,
+        };
+        store
+            .set_etag("/repos/foo/bar/pulls", &etag_only)
+            .expect("set etag-only");
+        assert_eq!(
+            store
+                .get_etag("/repos/foo/bar/pulls")
+                .expect("get etag-only"),
+            Some(etag_only)
+        );
+    }
+
+    #[test]
+    fn get_etag_absent_endpoint_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+        assert_eq!(store.get_etag("/never/fetched").expect("get absent"), None);
+    }
+
+    #[test]
+    fn set_etag_upsert_overwrites() {
+        let store = Store::open_in_memory().expect("open store");
+
+        store
+            .set_etag(
+                "/endpoint",
+                &EtagRecord {
+                    etag: Some("\"v1\"".to_string()),
+                    last_modified: None,
+                },
+            )
+            .expect("first set");
+        store
+            .set_etag(
+                "/endpoint",
+                &EtagRecord {
+                    etag: Some("\"v2\"".to_string()),
+                    last_modified: Some("later".to_string()),
+                },
+            )
+            .expect("overwrite");
+
+        assert_eq!(
+            store.get_etag("/endpoint").expect("get overwritten"),
+            Some(EtagRecord {
+                etag: Some("\"v2\"".to_string()),
+                last_modified: Some("later".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn cache_and_load_repo_prs_round_trip_ordered() {
+        let mut store = Store::open_in_memory().expect("open store");
+
+        // Insert out of order to prove load orders by number.
+        let prs = vec![
+            sample_pr("octocat/hello", 7, false),
+            sample_pr("octocat/hello", 2, true),
+        ];
+        store.cache_repo_prs("octocat/hello", &prs).expect("cache");
+
+        let loaded = store.load_repo_prs("octocat/hello").expect("load");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].id.number, 2);
+        assert_eq!(loaded[1].id.number, 7);
+        assert_eq!(loaded[0], sample_pr("octocat/hello", 2, true));
+        assert_eq!(loaded[1], sample_pr("octocat/hello", 7, false));
+    }
+
+    #[test]
+    fn cache_repo_prs_replaces_set_for_repo_only() {
+        let mut store = Store::open_in_memory().expect("open store");
+
+        store
+            .cache_repo_prs(
+                "octocat/hello",
+                &[
+                    sample_pr("octocat/hello", 1, false),
+                    sample_pr("octocat/hello", 2, false),
+                ],
+            )
+            .expect("cache hello v1");
+        store
+            .cache_repo_prs("other/repo", &[sample_pr("other/repo", 9, false)])
+            .expect("cache other");
+
+        // Re-cache hello with a wholly different set: old rows for hello must be gone.
+        store
+            .cache_repo_prs("octocat/hello", &[sample_pr("octocat/hello", 5, true)])
+            .expect("cache hello v2");
+
+        let hello = store.load_repo_prs("octocat/hello").expect("load hello");
+        assert_eq!(hello, vec![sample_pr("octocat/hello", 5, true)]);
+
+        // Other repo untouched.
+        let other = store.load_repo_prs("other/repo").expect("load other");
+        assert_eq!(other, vec![sample_pr("other/repo", 9, false)]);
+    }
+
+    #[test]
+    fn load_repo_prs_uncached_repo_is_empty() {
+        let store = Store::open_in_memory().expect("open store");
+        assert!(store
+            .load_repo_prs("never/cached")
+            .expect("load empty")
+            .is_empty());
+    }
+
+    #[test]
+    fn migration_v2_creates_etag_and_pr_tables() {
+        let store = Store::open_in_memory().expect("open + migrate");
+
+        for table in ["etags", "pull_requests"] {
+            let found: Option<String> = store
+                .connection()
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .optional()
+                .expect("query sqlite_master");
+            assert_eq!(found.as_deref(), Some(table));
+        }
+
+        let version: i64 = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version");
+        assert_eq!(version, 2);
     }
 }

@@ -5,10 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Async scheduler + change-detection; emits domain events (ARD AD-3/AD-7). Phase 0 ships the event
-# seam over `domain`; the `tokio` scheduler and diff logic are introduced in Phase 2.
+# Async scheduler + change-detection; emits domain events (ARD AD-3/AD-7). Phase 2 adds the
+# conditional-poll loop: lists open PRs via gh-client, diffs against the store cache, emits events.
 [dependencies]
 domain = { path = "../domain" }
+gh-client = { path = "../gh-client" }
+store = { path = "../store" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

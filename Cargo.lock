@@ -122,6 +122,7 @@ dependencies = [
  "domain",
  "gh-client",
  "iced",
+ "poller",
  "serde_json",
  "store",
  "tokio",
@@ -3148,6 +3149,12 @@ name = "poller"
 version = "0.1.0"
 dependencies = [
  "domain",
+ "gh-client",
+ "store",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

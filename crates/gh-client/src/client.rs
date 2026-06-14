@@ -1,7 +1,11 @@
+use std::time::Duration;
+
 use serde::de::DeserializeOwned;
 
 use crate::error::GhError;
-use crate::wire::{WireOrg, WireRepo, WireUser};
+use crate::open_prs_result::OpenPrsResult;
+use crate::pr_outcome::PrOutcome;
+use crate::wire::{WireOrg, WirePullRequest, WireRepo, WireUser};
 
 const USER_AGENT: &str = "alurtmee";
 const ACCEPT: &str = "application/vnd.github+json";
@@ -81,6 +85,87 @@ impl GhClient {
         Ok(wires.into_iter().map(Into::into).collect())
     }
 
+    /// List a repository's open pull requests using a conditional request (AD-1 / AD-4).
+    ///
+    /// `repo` is an `owner/name` slug. When `etag` is `Some`, the first request carries
+    /// `If-None-Match: {etag}`; GitHub answers `304 Not Modified` (free — no rate-limit cost, no
+    /// body) when nothing changed, in which case the outcome is [`PrOutcome::NotModified`].
+    /// Otherwise GitHub returns `200` with the list, which is paginated (subsequent pages are
+    /// fetched with plain, non-conditional GETs and concatenated) and yields
+    /// [`PrOutcome::Modified`]. The returned `ETag`, rate-limit snapshot, and poll interval are
+    /// always taken from the *first* response so the poller can drive its next cycle.
+    pub async fn list_open_prs(
+        &self,
+        repo: &str,
+        etag: Option<&str>,
+    ) -> Result<OpenPrsResult, GhError> {
+        let first_url = format!(
+            "{}/repos/{}/pulls?state=open&per_page=100",
+            self.base_url, repo
+        );
+        let resp = self.send_conditional(&first_url, etag).await?;
+
+        // The side-channel headers come from the first response regardless of status.
+        let rate_limit = parse_rate_limit(resp.headers());
+        let poll_interval = parse_poll_interval(resp.headers());
+        let response_etag = etag_of(resp.headers());
+
+        // 304: cached data is current. No body to read; echo GitHub's ETag if present, else the
+        // caller-supplied one (it remains valid).
+        if resp.status().as_u16() == 304 {
+            return Ok(OpenPrsResult {
+                outcome: PrOutcome::NotModified,
+                etag: response_etag.or_else(|| etag.map(str::to_string)),
+                rate_limit,
+                poll_interval,
+            });
+        }
+
+        // 200: capture the first page's ETag, parse it, then follow `rel="next"` with plain GETs.
+        let mut next = next_link(resp.headers());
+        let mut prs: Vec<domain::PullRequest> = decode::<Vec<WirePullRequest>>(resp)
+            .await?
+            .into_iter()
+            .map(|w| w.into_pull_request(repo))
+            .collect();
+        while let Some(url) = next.take() {
+            let page_resp = self.send(&url).await?;
+            next = next_link(page_resp.headers());
+            let page: Vec<WirePullRequest> = decode(page_resp).await?;
+            prs.extend(page.into_iter().map(|w| w.into_pull_request(repo)));
+        }
+
+        Ok(OpenPrsResult {
+            outcome: PrOutcome::Modified(prs),
+            etag: response_etag,
+            rate_limit,
+            poll_interval,
+        })
+    }
+
+    /// Issue a conditional GET, applying the standard headers plus `If-None-Match` when `etag` is
+    /// `Some`. Unlike [`send`](Self::send) this tolerates `304 Not Modified`: a 304 is neither a
+    /// 2xx success nor an error here, so it is passed through to the caller. Genuine error statuses
+    /// (401, rate-limit, other non-2xx-non-304) still map to `GhError`.
+    async fn send_conditional(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+    ) -> Result<reqwest::Response, GhError> {
+        let mut req = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .header(reqwest::header::ACCEPT, ACCEPT)
+            .header("X-GitHub-Api-Version", API_VERSION);
+        if let Some(tag) = etag {
+            req = req.header(reqwest::header::IF_NONE_MATCH, tag);
+        }
+        let resp = req.send().await?;
+        map_status_conditional(resp)
+    }
+
     /// Issue a single GET, applying the standard headers and mapping the response status.
     async fn send(&self, url: &str) -> Result<reqwest::Response, GhError> {
         let resp = self
@@ -133,6 +218,52 @@ fn map_status(resp: reqwest::Response) -> Result<reqwest::Response, GhError> {
         }),
         other => Err(GhError::Http { status: other }),
     }
+}
+
+/// Like [`map_status`] but for the conditional-request path: a `304 Not Modified` is passed
+/// through unchanged (it is not a 2xx success, but it is *not* an error either). All other
+/// non-success statuses map to a `GhError` via the same rules. Kept separate so the existing
+/// non-conditional callers — which never expect 304 — continue to treat it as an unexpected status.
+fn map_status_conditional(resp: reqwest::Response) -> Result<reqwest::Response, GhError> {
+    if resp.status().as_u16() == 304 {
+        return Ok(resp);
+    }
+    map_status(resp)
+}
+
+/// Parse GitHub's `X-RateLimit-*` headers into a `RateLimitState`. Returns `None` unless
+/// `x-ratelimit-limit`, `x-ratelimit-remaining`, and `x-ratelimit-reset` are all present and
+/// parse as `u64`.
+fn parse_rate_limit(headers: &reqwest::header::HeaderMap) -> Option<domain::RateLimitState> {
+    let limit = parse_u64_header(headers, "x-ratelimit-limit")?;
+    let remaining = parse_u64_header(headers, "x-ratelimit-remaining")?;
+    let reset_at = parse_u64_header(headers, "x-ratelimit-reset")?;
+    Some(domain::RateLimitState {
+        limit,
+        remaining,
+        reset_at,
+    })
+}
+
+/// Parse GitHub's `X-Poll-Interval` (seconds) into a `Duration`, if present and numeric.
+fn parse_poll_interval(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    parse_u64_header(headers, "x-poll-interval").map(Duration::from_secs)
+}
+
+/// The `ETag` response header value, if present.
+fn etag_of(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+}
+
+/// Fetch a header by name and parse its trimmed value as `u64`.
+fn parse_u64_header(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
 }
 
 /// Decode a (successful) response body into `T`, mapping decode failures to `GhError::Decode`.
@@ -357,5 +488,255 @@ mod tests {
                 .unwrap(),
         );
         assert!(next_link(&headers).is_none());
+    }
+
+    fn pulls_two() -> &'static str {
+        r#"[
+            {"number":1,"title":"First PR","user":{"login":"alice","id":10,"type":"User"},"draft":false,"updated_at":"2026-06-14T09:00:00Z","html_url":"https://github.com/octocat/hello/pull/1","state":"open"},
+            {"number":2,"title":"Second PR","user":{"login":"bob","id":11,"type":"User"},"draft":true,"updated_at":"2026-06-14T10:00:00Z","html_url":"https://github.com/octocat/hello/pull/2","state":"open"}
+        ]"#
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_200_parses_two_prs_and_captures_etag() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"abc\"")
+                    .set_body_string(pulls_two()),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client.list_open_prs("octocat/hello", None).await.unwrap();
+
+        assert_eq!(result.etag.as_deref(), Some("\"abc\""));
+        match result.outcome {
+            PrOutcome::Modified(prs) => {
+                assert_eq!(prs.len(), 2);
+                assert_eq!(prs[0].id, domain::PrId::new("octocat/hello", 1));
+                assert_eq!(prs[0].title, "First PR");
+                assert_eq!(prs[0].author, "alice");
+                assert!(!prs[0].draft);
+                assert_eq!(prs[1].id.number, 2);
+                assert!(prs[1].draft);
+            }
+            other => panic!("expected Modified, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_sends_if_none_match_and_304_yields_not_modified() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .and(header("if-none-match", "\"abc\""))
+            .respond_with(ResponseTemplate::new(304).insert_header("ETag", "\"abc\""))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client
+            .list_open_prs("octocat/hello", Some("\"abc\""))
+            .await
+            .unwrap();
+
+        assert_eq!(result.outcome, PrOutcome::NotModified);
+        assert_eq!(result.etag.as_deref(), Some("\"abc\""));
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_304_without_echoed_etag_falls_back_to_supplied() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .and(header("if-none-match", "\"xyz\""))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client
+            .list_open_prs("octocat/hello", Some("\"xyz\""))
+            .await
+            .unwrap();
+
+        assert_eq!(result.outcome, PrOutcome::NotModified);
+        assert_eq!(result.etag.as_deref(), Some("\"xyz\""));
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_changed_body_reflects_new_updated_at() {
+        let server = MockServer::start().await;
+        let changed = r#"[
+            {"number":1,"title":"First PR","user":{"login":"alice","id":10,"type":"User"},"draft":false,"updated_at":"2026-06-14T12:30:00Z","html_url":"https://github.com/octocat/hello/pull/1","state":"open"}
+        ]"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"new\"")
+                    .set_body_string(changed),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client.list_open_prs("octocat/hello", None).await.unwrap();
+        assert_eq!(result.etag.as_deref(), Some("\"new\""));
+        match result.outcome {
+            PrOutcome::Modified(prs) => {
+                assert_eq!(prs.len(), 1);
+                assert_eq!(prs[0].updated_at, "2026-06-14T12:30:00Z");
+            }
+            other => panic!("expected Modified, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_parses_rate_limit_and_poll_interval() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"abc\"")
+                    .insert_header("x-ratelimit-limit", "5000")
+                    .insert_header("x-ratelimit-remaining", "4999")
+                    .insert_header("x-ratelimit-reset", "1700000000")
+                    .insert_header("x-poll-interval", "60")
+                    .set_body_string("[]"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client.list_open_prs("octocat/hello", None).await.unwrap();
+
+        assert_eq!(
+            result.rate_limit,
+            Some(domain::RateLimitState {
+                limit: 5000,
+                remaining: 4999,
+                reset_at: 1_700_000_000,
+            })
+        );
+        assert_eq!(result.poll_interval, Some(Duration::from_secs(60)));
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_follows_pagination() {
+        let server = MockServer::start().await;
+        let next_url = format!("{}/repos/octocat/hello/pulls?page=2", server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"[{"number":3,"title":"Third","user":{"login":"carol","id":12,"type":"User"},"draft":false,"updated_at":"2026-06-14T11:00:00Z","html_url":"https://github.com/octocat/hello/pull/3","state":"open"}]"#,
+            ))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"page1\"")
+                    .insert_header("Link", format!(r#"<{next_url}>; rel="next""#).as_str())
+                    .set_body_string(pulls_two()),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let result = client.list_open_prs("octocat/hello", None).await.unwrap();
+        assert_eq!(result.etag.as_deref(), Some("\"page1\""));
+        match result.outcome {
+            PrOutcome::Modified(prs) => {
+                assert_eq!(prs.len(), 3, "should concatenate both pages");
+                let numbers: Vec<u64> = prs.iter().map(|p| p.id.number).collect();
+                assert_eq!(numbers, vec![1, 2, 3]);
+            }
+            other => panic!("expected Modified, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_open_prs_maps_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "bad-token").unwrap();
+        let err = client
+            .list_open_prs("octocat/hello", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GhError::Unauthorized));
+    }
+
+    #[test]
+    fn parse_rate_limit_requires_all_three_headers() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-ratelimit-limit", "5000".parse().unwrap());
+        headers.insert("x-ratelimit-remaining", "10".parse().unwrap());
+        // reset missing → None.
+        assert!(parse_rate_limit(&headers).is_none());
+
+        headers.insert("x-ratelimit-reset", "1700000000".parse().unwrap());
+        assert_eq!(
+            parse_rate_limit(&headers),
+            Some(domain::RateLimitState {
+                limit: 5000,
+                remaining: 10,
+                reset_at: 1_700_000_000,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_poll_interval_reads_seconds() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        assert!(parse_poll_interval(&headers).is_none());
+        headers.insert("x-poll-interval", "60".parse().unwrap());
+        assert_eq!(parse_poll_interval(&headers), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn etag_of_returns_header_value() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        assert!(etag_of(&headers).is_none());
+        headers.insert(reqwest::header::ETAG, "\"abc\"".parse().unwrap());
+        assert_eq!(etag_of(&headers).as_deref(), Some("\"abc\""));
+    }
+
+    #[tokio::test]
+    async fn map_status_conditional_passes_304_through_while_plain_rejects_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let url = format!("{}/probe", client.base_url());
+
+        // Conditional path tolerates 304.
+        let cond = client.send_conditional(&url, None).await.unwrap();
+        assert_eq!(cond.status().as_u16(), 304);
+
+        // The non-conditional path treats 304 as an unexpected status.
+        let plain = client.send(&url).await;
+        assert!(matches!(plain, Err(GhError::Http { status: 304 })));
     }
 }

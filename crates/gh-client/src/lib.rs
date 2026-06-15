@@ -9,6 +9,7 @@ mod client;
 mod error;
 mod open_prs_result;
 mod pr_outcome;
+mod rfc3339;
 mod wire;
 
 pub use client::GhClient;

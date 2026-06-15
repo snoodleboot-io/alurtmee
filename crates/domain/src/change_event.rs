@@ -1,3 +1,4 @@
+use crate::ci_alert::CiAlert;
 use crate::classification::Classification;
 use crate::pr_enrichment::PrEnrichment;
 use crate::pr_id::PrId;
@@ -23,4 +24,6 @@ pub enum ChangeEvent {
     Enriched(PrEnrichment),
     /// The human/bot + feature/security classification verdict for a PR that changed.
     Classified(Classification),
+    /// A CI condition worth surfacing (slow run / failed run) for a newly-seen workflow run.
+    CiAlert(CiAlert),
 }

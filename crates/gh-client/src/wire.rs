@@ -23,6 +23,8 @@ mod wire_repo;
 mod wire_repo_owner;
 mod wire_review;
 mod wire_user;
+mod wire_workflow_run;
+mod wire_workflow_runs_response;
 
 pub(crate) use wire_check_run::WireCheckRun;
 pub(crate) use wire_check_runs_response::WireCheckRunsResponse;
@@ -35,3 +37,5 @@ pub(crate) use wire_pull_request_user::WirePullRequestUser;
 pub(crate) use wire_repo::WireRepo;
 pub(crate) use wire_review::WireReview;
 pub(crate) use wire_user::WireUser;
+pub(crate) use wire_workflow_run::WireWorkflowRun;
+pub(crate) use wire_workflow_runs_response::WireWorkflowRunsResponse;

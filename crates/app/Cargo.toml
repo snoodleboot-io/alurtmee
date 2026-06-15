@@ -18,6 +18,7 @@ gh-client = { path = "../gh-client" }
 store = { path = "../store" }
 poller = { path = "../poller" }
 iced = { workspace = true, features = ["tokio"] }
+notify-rust = { workspace = true }
 directories = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

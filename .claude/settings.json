@@ -16,7 +16,16 @@
       "Bash(cargo clippy *)",
       "Bash(echo \"FMT_EXIT=$?\")",
       "Bash(dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames)",
-      "Bash(echo \"BUILD_EXIT=$?\")"
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(ps -eo pid,etimes,stat,comm)",
+      "Bash(awk '$4==\"alurtmee\"{print}')",
+      "Bash(ps -o pid,etimes,stat,comm -p 1258208)",
+      "Bash(awk '$4==\"alurtmee\"{print \"alurtmee ALIVE pid=\"$1\" elapsed=\"$2\"s\"}')",
+      "Bash(pkill -f 'target/debug/alurtmee')",
+      "Bash(nohup env ALURTMEE_DEMO=1 RUST_LOG=warn ./target/debug/alurtmee)",
+      "Bash(pkill -x alurtmee)",
+      "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 ALURTMEE_DEMO=1 RUST_LOG=debug RUST_BACKTRACE=1 ./target/debug/alurtmee)",
+      "Bash(echo \"EXIT_GREP=$?\")"
     ]
   }
 }

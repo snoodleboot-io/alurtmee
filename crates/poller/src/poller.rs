@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use domain::{ChangeEvent, PollCadence};
+use domain::{ChangeEvent, PollCadence, PrEnrichment, PullRequest};
 use gh_client::{GhClient, PrOutcome};
 use store::{EtagRecord, Store};
 use tokio::sync::mpsc::Sender;
@@ -9,13 +9,19 @@ use crate::diff::diff_pull_requests;
 use crate::poll_error::PollError;
 use crate::poll_outcome::PollOutcome;
 
-/// The cheap change-detection poller (ARD AD-3).
+/// The two-tier poller (ARD AD-3).
+///
+/// **Why two tiers, not refetch-all (§3.6):** the cheap tier is a single conditional request per
+/// repo that 304s for free when nothing changed; the expensive tier (reviews + comments +
+/// check-runs, several requests per PR) fires *only* for PRs the diff flagged as changed. Refetching
+/// every PR's enrichment each cycle would burn rate limit and CPU on PRs that didn't move — exactly
+/// what AD-3 avoids. So enrichment is gated behind change-detection here.
 ///
 /// Owns its own [`GhClient`] and [`Store`] connection so it can run on a background task without
 /// sharing mutable state with the UI; it communicates results purely as [`ChangeEvent`]s over a
 /// channel. One [`Self::poll_once`] is the unit of behaviour (conditionally fetch each selected
-/// repo, diff against the cache, persist), which is what the acceptance tests drive; [`Self::run`]
-/// is the thin scheduling shell around it.
+/// repo, diff against the cache, enrich the changed PRs, persist), which is what the acceptance
+/// tests drive; [`Self::run`] is the thin scheduling shell around it.
 pub struct Poller {
     client: GhClient,
     store: Store,
@@ -76,16 +82,45 @@ impl Poller {
 
             if let PrOutcome::Modified(fresh) = result.outcome {
                 let cached = self.store.load_repo_prs(repo)?;
-                let events = diff_pull_requests(&cached, &fresh);
-                if !events.is_empty() {
-                    outcome.changed = true;
-                    outcome.events.extend(events);
-                }
+                let diff = diff_pull_requests(&cached, &fresh);
                 self.store.cache_repo_prs(repo, &fresh)?;
+                if !diff.is_empty() {
+                    outcome.changed = true;
+                }
+
+                // Enrichment tier (AD-3): fetch reviews/comments/check-runs ONLY for the PRs the
+                // diff flagged as added/updated. A 304 never reaches here, and unchanged PRs are
+                // skipped, so enrichment work is proportional to what actually changed.
+                let mut enriched = Vec::new();
+                for event in &diff {
+                    let pr = match event {
+                        ChangeEvent::Added(pr) | ChangeEvent::Updated(pr) => pr,
+                        _ => continue,
+                    };
+                    let enrichment = self.enrich_pr(pr).await?;
+                    self.store.save_enrichment(&enrichment)?;
+                    enriched.push(ChangeEvent::Enriched(enrichment));
+                }
+
+                outcome.events.extend(diff);
+                outcome.events.extend(enriched);
             }
         }
 
         Ok(outcome)
+    }
+
+    /// Fetch and assemble the enrichment (reviews, merged comments, reconciled CI verdict) for one
+    /// changed PR. The check-runs/status lookup is keyed on the PR's head SHA.
+    ///
+    /// Takes `&mut self` (not `&self`) deliberately: the returned future is spawned on a background
+    /// task and must be `Send`, but a shared `&Poller` is `!Send` because the store's SQLite
+    /// `Connection` is `!Sync`. A unique `&mut Poller` only requires `Poller: Send`, which holds.
+    async fn enrich_pr(&mut self, pr: &PullRequest) -> Result<PrEnrichment, PollError> {
+        let reviews = self.client.list_reviews(&pr.id.repo, pr.id.number).await?;
+        let comments = self.client.list_comments(&pr.id.repo, pr.id.number).await?;
+        let tests = self.client.test_summary(&pr.id.repo, &pr.head_sha).await?;
+        Ok(PrEnrichment::new(pr.id.clone(), reviews, comments, tests))
     }
 
     /// Drive the poll loop, streaming each [`ChangeEvent`] over `tx` until the consumer drops the
@@ -165,11 +200,54 @@ fn apply_jitter(base: Duration, fraction: f64) -> Duration {
 mod tests {
     use super::*;
     use domain::{PrId, PullRequest};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn cadence() -> PollCadence {
         PollCadence::new(Duration::from_millis(20), Duration::from_millis(100))
+    }
+
+    /// Mount empty/default responses for every enrichment endpoint so a changed PR enriches
+    /// cleanly. Path-regex matchers cover any PR number / head SHA (including an empty SHA).
+    async fn mount_enrichment_defaults(server: &MockServer) {
+        for suffix in [
+            r"/reviews$",
+            r"/pulls/\d+/comments$",
+            r"/issues/\d+/comments$",
+        ] {
+            Mock::given(method("GET"))
+                .and(path_regex(suffix))
+                .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+                .mount(server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path_regex(r"/check-runs$"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"check_runs":[]}"#))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/status$"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"success"}"#))
+            .mount(server)
+            .await;
+    }
+
+    /// Count events of each kind for concise assertions.
+    fn count_kinds(events: &[ChangeEvent]) -> (usize, usize, usize, usize) {
+        let mut added = 0;
+        let mut updated = 0;
+        let mut removed = 0;
+        let mut enriched = 0;
+        for event in events {
+            match event {
+                ChangeEvent::Added(_) => added += 1,
+                ChangeEvent::Updated(_) => updated += 1,
+                ChangeEvent::Removed(_) => removed += 1,
+                ChangeEvent::Enriched(_) => enriched += 1,
+            }
+        }
+        (added, updated, removed, enriched)
     }
 
     fn pulls_body() -> &'static str {
@@ -203,12 +281,16 @@ mod tests {
             )
             .mount(&server)
             .await;
+        mount_enrichment_defaults(&server).await;
 
         let mut poller = poller_for(&server);
         let outcome = poller.poll_once(&["o/r".to_string()]).await.unwrap();
 
         assert!(outcome.changed);
-        assert_eq!(outcome.events.len(), 2);
+        // Two PRs appear (Added) and each is enriched (Enriched).
+        let (added, _, _, enriched) = count_kinds(&outcome.events);
+        assert_eq!(added, 2);
+        assert_eq!(enriched, 2);
         assert!(matches!(&outcome.events[0], ChangeEvent::Added(p) if p.id.number == 1));
         // The fetched set is now cached.
         assert_eq!(poller.store.load_repo_prs("o/r").unwrap().len(), 2);
@@ -247,6 +329,7 @@ mod tests {
                     draft: false,
                     updated_at: "t1".to_string(),
                     url: "https://github.com/o/r/pull/1".to_string(),
+                    head_sha: String::new(),
                 }],
             )
             .unwrap();
@@ -271,6 +354,7 @@ mod tests {
             )
             .mount(&server)
             .await;
+        mount_enrichment_defaults(&server).await;
 
         let mut poller = poller_for(&server);
         // Cache the prior two PRs; the fresh body advances #1 and drops #2.
@@ -286,6 +370,7 @@ mod tests {
                         draft: false,
                         updated_at: "t1".to_string(),
                         url: "https://github.com/o/r/pull/1".to_string(),
+                        head_sha: String::new(),
                     },
                     PullRequest {
                         id: PrId::new("o/r", 2),
@@ -294,6 +379,7 @@ mod tests {
                         draft: true,
                         updated_at: "t1".to_string(),
                         url: "https://github.com/o/r/pull/2".to_string(),
+                        head_sha: String::new(),
                     },
                 ],
             )
@@ -309,10 +395,14 @@ mod tests {
             draft: false,
             updated_at: "t2".to_string(),
             url: "https://github.com/o/r/pull/1".to_string(),
+            head_sha: String::new(),
         })));
         assert!(outcome
             .events
             .contains(&ChangeEvent::Removed(PrId::new("o/r", 2))));
+        // Only the surviving/changed PR (#1) is enriched; the removed #2 is not.
+        let (_, _, _, enriched) = count_kinds(&outcome.events);
+        assert_eq!(enriched, 1);
     }
 
     #[tokio::test]
@@ -327,6 +417,7 @@ mod tests {
             )
             .mount(&server)
             .await;
+        mount_enrichment_defaults(&server).await;
 
         let poller = poller_for(&server);
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);

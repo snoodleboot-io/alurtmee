@@ -1,3 +1,4 @@
+use crate::pr_enrichment::PrEnrichment;
 use crate::pr_id::PrId;
 use crate::pull_request::PullRequest;
 
@@ -14,4 +15,6 @@ pub enum ChangeEvent {
     Updated(PullRequest),
     /// A pull request is no longer open; carries its identity.
     Removed(PrId),
+    /// Enrichment (reviews, comments, test results) for a PR that changed this cycle.
+    Enriched(PrEnrichment),
 }

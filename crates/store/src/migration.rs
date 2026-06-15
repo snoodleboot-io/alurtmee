@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use crate::error::StoreError;
 
 /// The schema version this build expects after a successful migration.
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 /// Bring `conn` up to [`SCHEMA_VERSION`], applying only the steps not yet present.
 ///
@@ -22,6 +22,8 @@ pub(crate) const SCHEMA_VERSION: i64 = 2;
 ///   selection JSON).
 /// - v2 introduces `etags` (HTTP conditional-request validators) and `pull_requests` (the cached
 ///   open-PR snapshot per repo).
+/// - v3 introduces `reviews`, `comments`, and `pr_tests` (the per-PR enrichment payload: submitted
+///   reviews, merged comments, and the reconciled CI verdict). `idx` columns preserve list order.
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
@@ -39,7 +41,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
         )?;
     }
 
-    if version < SCHEMA_VERSION {
+    if version < 2 {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS etags (
                  endpoint      TEXT PRIMARY KEY NOT NULL,
@@ -54,9 +56,44 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
                  draft      INTEGER NOT NULL,
                  updated_at TEXT    NOT NULL,
                  url        TEXT    NOT NULL,
+                 head_sha   TEXT    NOT NULL DEFAULT '',
                  PRIMARY KEY (repo, number)
              );
              PRAGMA user_version = 2;",
+        )?;
+    }
+
+    if version < SCHEMA_VERSION {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS reviews (
+                 repo         TEXT    NOT NULL,
+                 number       INTEGER NOT NULL,
+                 idx          INTEGER NOT NULL,
+                 author       TEXT    NOT NULL,
+                 state        TEXT    NOT NULL,
+                 submitted_at TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number, idx)
+             );
+             CREATE TABLE IF NOT EXISTS comments (
+                 repo       TEXT    NOT NULL,
+                 number     INTEGER NOT NULL,
+                 idx        INTEGER NOT NULL,
+                 kind       TEXT    NOT NULL,
+                 author     TEXT    NOT NULL,
+                 body       TEXT    NOT NULL,
+                 created_at TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number, idx)
+             );
+             CREATE TABLE IF NOT EXISTS pr_tests (
+                 repo    TEXT    NOT NULL,
+                 number  INTEGER NOT NULL,
+                 passed  INTEGER NOT NULL,
+                 failed  INTEGER NOT NULL,
+                 pending INTEGER NOT NULL,
+                 state   TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number)
+             );
+             PRAGMA user_version = 3;",
         )?;
     }
 
@@ -85,27 +122,33 @@ mod tests {
     }
 
     #[test]
-    fn fresh_migrate_creates_all_v2_tables_at_version_2() {
+    fn fresh_migrate_creates_all_tables_at_current_version() {
         let conn = Connection::open_in_memory().expect("open in-memory");
         migrate(&conn).expect("migrate");
 
         assert!(table_exists(&conn, "config"));
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
-        assert_eq!(user_version(&conn), 2);
+        assert!(table_exists(&conn, "reviews"));
+        assert!(table_exists(&conn, "comments"));
+        assert!(table_exists(&conn, "pr_tests"));
+        assert_eq!(user_version(&conn), 3);
     }
 
     #[test]
-    fn migrate_is_idempotent_at_v2() {
+    fn migrate_is_idempotent() {
         let conn = Connection::open_in_memory().expect("open in-memory");
         migrate(&conn).expect("first migrate");
         migrate(&conn).expect("second migrate");
         migrate(&conn).expect("third migrate");
 
-        assert_eq!(user_version(&conn), 2);
+        assert_eq!(user_version(&conn), 3);
         assert!(table_exists(&conn, "config"));
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
+        assert!(table_exists(&conn, "reviews"));
+        assert!(table_exists(&conn, "comments"));
+        assert!(table_exists(&conn, "pr_tests"));
     }
 
     #[test]
@@ -129,12 +172,15 @@ mod tests {
 
         assert_eq!(user_version(&conn), 1);
 
-        migrate(&conn).expect("upgrade v1 -> v2");
+        migrate(&conn).expect("upgrade v1 -> current");
 
         // Version advanced and the new tables landed.
-        assert_eq!(user_version(&conn), 2);
+        assert_eq!(user_version(&conn), 3);
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
+        assert!(table_exists(&conn, "reviews"));
+        assert!(table_exists(&conn, "comments"));
+        assert!(table_exists(&conn, "pr_tests"));
 
         // The pre-existing v1 config row survived — the upgrade is non-destructive.
         let value: String = conn
@@ -143,5 +189,64 @@ mod tests {
             })
             .expect("v1 config row survives");
         assert_eq!(value, "dark");
+    }
+
+    #[test]
+    fn incremental_upgrade_from_v2_preserves_data_and_adds_v3_tables() {
+        // Simulate a database written by the v2 build: config + etags + pull_requests exist and
+        // user_version is pinned at 2.
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch(
+            "CREATE TABLE config (
+                 key   TEXT PRIMARY KEY NOT NULL,
+                 value TEXT NOT NULL
+             );
+             CREATE TABLE etags (
+                 endpoint      TEXT PRIMARY KEY NOT NULL,
+                 etag          TEXT,
+                 last_modified TEXT
+             );
+             CREATE TABLE pull_requests (
+                 repo       TEXT    NOT NULL,
+                 number     INTEGER NOT NULL,
+                 title      TEXT    NOT NULL,
+                 author     TEXT    NOT NULL,
+                 draft      INTEGER NOT NULL,
+                 updated_at TEXT    NOT NULL,
+                 url        TEXT    NOT NULL,
+                 head_sha   TEXT    NOT NULL DEFAULT '',
+                 PRIMARY KEY (repo, number)
+             );
+             PRAGMA user_version = 2;",
+        )
+        .expect("seed v2 schema");
+        conn.execute(
+            "INSERT INTO pull_requests
+                 (repo, number, title, author, draft, updated_at, url, head_sha)
+             VALUES ('octocat/hello', 7, 'A PR', 'octocat', 0, '2026-06-14T00:00:00Z',
+                     'https://github.com/octocat/hello/pull/7', 'abc')",
+            [],
+        )
+        .expect("seed v2 pull_requests row");
+
+        assert_eq!(user_version(&conn), 2);
+
+        migrate(&conn).expect("upgrade v2 -> v3");
+
+        // Version advanced and the three v3 enrichment tables landed.
+        assert_eq!(user_version(&conn), 3);
+        assert!(table_exists(&conn, "reviews"));
+        assert!(table_exists(&conn, "comments"));
+        assert!(table_exists(&conn, "pr_tests"));
+
+        // The pre-existing v2 pull_requests row survived — the upgrade is non-destructive.
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM pull_requests WHERE repo = 'octocat/hello' AND number = 7",
+                [],
+                |row| row.get(0),
+            )
+            .expect("v2 pull_requests row survives");
+        assert_eq!(title, "A PR");
     }
 }

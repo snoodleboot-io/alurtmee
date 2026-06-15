@@ -1,0 +1,16 @@
+[
+  {
+    "id": 5001,
+    "user": { "login": "alice", "id": 10, "type": "User" },
+    "state": "APPROVED",
+    "submitted_at": "2026-06-14T09:00:00Z",
+    "body": "LGTM"
+  },
+  {
+    "id": 5002,
+    "user": { "login": "bob", "id": 11, "type": "User" },
+    "state": "CHANGES_REQUESTED",
+    "submitted_at": "2026-06-14T10:00:00Z",
+    "body": "Please address the failing test."
+  }
+]

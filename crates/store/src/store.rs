@@ -126,8 +126,8 @@ impl Store {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO pull_requests
-                     (repo, number, title, author, draft, updated_at, url)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                     (repo, number, title, author, draft, updated_at, url, head_sha)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
             for pr in prs {
                 stmt.execute(params![
@@ -138,6 +138,7 @@ impl Store {
                     pr.draft as i64,
                     pr.updated_at,
                     pr.url,
+                    pr.head_sha,
                 ])?;
             }
         }
@@ -150,7 +151,7 @@ impl Store {
     /// Returns an empty `Vec` for a repo that has never been cached.
     pub fn load_repo_prs(&self, repo: &str) -> Result<Vec<domain::PullRequest>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT number, title, author, draft, updated_at, url
+            "SELECT number, title, author, draft, updated_at, url, head_sha
              FROM pull_requests
              WHERE repo = ?1
              ORDER BY number",
@@ -165,6 +166,7 @@ impl Store {
                 draft: draft != 0,
                 updated_at: row.get(4)?,
                 url: row.get(5)?,
+                head_sha: row.get(6)?,
             })
         })?;
 
@@ -173,6 +175,197 @@ impl Store {
             prs.push(pr?);
         }
         Ok(prs)
+    }
+
+    /// Atomically replace the stored enrichment for a single PR.
+    ///
+    /// Runs in one transaction keyed by `(e.id.repo, e.id.number)`: existing `reviews`, `comments`,
+    /// and `pr_tests` rows for that PR are deleted, then the new reviews/comments are inserted with
+    /// their list index (`idx`, preserving order on reload) and the `pr_tests` row is upserted. A
+    /// failure rolls the whole swap back; enrichment for other PRs is untouched.
+    ///
+    /// Only non-secret PR data is written — never a token (ARD AD-6).
+    pub fn save_enrichment(&mut self, e: &domain::PrEnrichment) -> Result<(), StoreError> {
+        let repo = &e.id.repo;
+        let number = e.id.number;
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM reviews WHERE repo = ?1 AND number = ?2",
+            params![repo, number],
+        )?;
+        tx.execute(
+            "DELETE FROM comments WHERE repo = ?1 AND number = ?2",
+            params![repo, number],
+        )?;
+        tx.execute(
+            "DELETE FROM pr_tests WHERE repo = ?1 AND number = ?2",
+            params![repo, number],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO reviews (repo, number, idx, author, state, submitted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (idx, review) in e.reviews.iter().enumerate() {
+                stmt.execute(params![
+                    repo,
+                    number,
+                    idx as i64,
+                    review.author,
+                    review.state,
+                    review.submitted_at,
+                ])?;
+            }
+        }
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO comments (repo, number, idx, kind, author, body, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for (idx, comment) in e.comments.iter().enumerate() {
+                stmt.execute(params![
+                    repo,
+                    number,
+                    idx as i64,
+                    comment_kind_to_text(comment.kind),
+                    comment.author,
+                    comment.body,
+                    comment.created_at,
+                ])?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO pr_tests (repo, number, passed, failed, pending, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                repo,
+                number,
+                e.tests.passed,
+                e.tests.failed,
+                e.tests.pending,
+                test_state_to_text(e.tests.state),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load the stored enrichment for `id`, or `None` if the PR was never enriched.
+    ///
+    /// The `pr_tests` row is the presence marker: a PR with no `pr_tests` row has never been
+    /// enriched and yields `None` (distinct from an enriched PR that happens to have no reviews or
+    /// comments). When present, reviews and comments are returned in their stored `idx` order.
+    pub fn load_enrichment(
+        &self,
+        id: &domain::PrId,
+    ) -> Result<Option<domain::PrEnrichment>, StoreError> {
+        let repo = &id.repo;
+        let number = id.number;
+
+        let tests = self
+            .conn
+            .query_row(
+                "SELECT passed, failed, pending, state FROM pr_tests
+                 WHERE repo = ?1 AND number = ?2",
+                params![repo, number],
+                |row| {
+                    let state: String = row.get(3)?;
+                    Ok(domain::TestSummary {
+                        passed: row.get(0)?,
+                        failed: row.get(1)?,
+                        pending: row.get(2)?,
+                        state: test_state_from_text(&state),
+                    })
+                },
+            )
+            .optional()?;
+
+        let tests = match tests {
+            None => return Ok(None),
+            Some(tests) => tests,
+        };
+
+        let mut review_stmt = self.conn.prepare(
+            "SELECT author, state, submitted_at FROM reviews
+             WHERE repo = ?1 AND number = ?2
+             ORDER BY idx",
+        )?;
+        let review_rows = review_stmt.query_map(params![repo, number], |row| {
+            Ok(domain::Review {
+                author: row.get(0)?,
+                state: row.get(1)?,
+                submitted_at: row.get(2)?,
+            })
+        })?;
+        let mut reviews = Vec::new();
+        for review in review_rows {
+            reviews.push(review?);
+        }
+
+        let mut comment_stmt = self.conn.prepare(
+            "SELECT kind, author, body, created_at FROM comments
+             WHERE repo = ?1 AND number = ?2
+             ORDER BY idx",
+        )?;
+        let comment_rows = comment_stmt.query_map(params![repo, number], |row| {
+            let kind: String = row.get(0)?;
+            Ok(domain::Comment {
+                author: row.get(1)?,
+                kind: comment_kind_from_text(&kind),
+                body: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        let mut comments = Vec::new();
+        for comment in comment_rows {
+            comments.push(comment?);
+        }
+
+        Ok(Some(domain::PrEnrichment::new(
+            id.clone(),
+            reviews,
+            comments,
+            tests,
+        )))
+    }
+}
+
+/// Map a [`domain::CommentKind`] to its stored text form.
+fn comment_kind_to_text(kind: domain::CommentKind) -> &'static str {
+    match kind {
+        domain::CommentKind::Issue => "issue",
+        domain::CommentKind::Review => "review",
+    }
+}
+
+/// Map stored text back to a [`domain::CommentKind`]. An unknown value defaults to `Issue`
+/// (defensive: we never write unknown values).
+fn comment_kind_from_text(text: &str) -> domain::CommentKind {
+    match text {
+        "review" => domain::CommentKind::Review,
+        _ => domain::CommentKind::Issue,
+    }
+}
+
+/// Map a [`domain::TestState`] to its stored text form.
+fn test_state_to_text(state: domain::TestState) -> &'static str {
+    match state {
+        domain::TestState::None => "none",
+        domain::TestState::Pending => "pending",
+        domain::TestState::Passing => "passing",
+        domain::TestState::Failing => "failing",
+    }
+}
+
+/// Map stored text back to a [`domain::TestState`]. An unknown value defaults to `None`
+/// (defensive: we never write unknown values).
+fn test_state_from_text(text: &str) -> domain::TestState {
+    match text {
+        "pending" => domain::TestState::Pending,
+        "passing" => domain::TestState::Passing,
+        "failing" => domain::TestState::Failing,
+        _ => domain::TestState::None,
     }
 }
 
@@ -300,6 +493,7 @@ mod tests {
             draft,
             updated_at: "2026-06-14T00:00:00Z".to_string(),
             url: format!("https://github.com/{repo}/pull/{number}"),
+            head_sha: String::new(),
         }
     }
 
@@ -433,10 +627,10 @@ mod tests {
     }
 
     #[test]
-    fn migration_v2_creates_etag_and_pr_tables() {
+    fn migration_creates_all_enrichment_tables() {
         let store = Store::open_in_memory().expect("open + migrate");
 
-        for table in ["etags", "pull_requests"] {
+        for table in ["etags", "pull_requests", "reviews", "comments", "pr_tests"] {
             let found: Option<String> = store
                 .connection()
                 .query_row(
@@ -453,6 +647,188 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
+    }
+
+    fn sample_enrichment(repo: &str, number: u64) -> domain::PrEnrichment {
+        domain::PrEnrichment::new(
+            domain::PrId::new(repo, number),
+            vec![
+                domain::Review {
+                    author: "alice".to_string(),
+                    state: "APPROVED".to_string(),
+                    submitted_at: "2026-06-14T01:00:00Z".to_string(),
+                },
+                domain::Review {
+                    author: "bob".to_string(),
+                    state: "CHANGES_REQUESTED".to_string(),
+                    submitted_at: "2026-06-14T02:00:00Z".to_string(),
+                },
+            ],
+            vec![
+                domain::Comment {
+                    author: "carol".to_string(),
+                    kind: domain::CommentKind::Issue,
+                    body: "Looks good overall.".to_string(),
+                    created_at: "2026-06-14T03:00:00Z".to_string(),
+                },
+                domain::Comment {
+                    author: "dave".to_string(),
+                    kind: domain::CommentKind::Review,
+                    body: "Nit on line 42.".to_string(),
+                    created_at: "2026-06-14T04:00:00Z".to_string(),
+                },
+            ],
+            domain::TestSummary {
+                passed: 2,
+                failed: 1,
+                pending: 0,
+                state: domain::TestState::Failing,
+            },
+        )
+    }
+
+    #[test]
+    fn enrichment_round_trip_preserves_order_and_kinds() {
+        let mut store = Store::open_in_memory().expect("open store");
+        let enrichment = sample_enrichment("octocat/hello", 7);
+
+        store.save_enrichment(&enrichment).expect("save");
+        let loaded = store
+            .load_enrichment(&domain::PrId::new("octocat/hello", 7))
+            .expect("load")
+            .expect("present");
+
+        assert_eq!(loaded, enrichment);
+
+        // Spell out the order/kind/state guarantees the equality above subsumes.
+        assert_eq!(loaded.reviews[0].author, "alice");
+        assert_eq!(loaded.reviews[1].author, "bob");
+        assert_eq!(loaded.comments[0].kind, domain::CommentKind::Issue);
+        assert_eq!(loaded.comments[1].kind, domain::CommentKind::Review);
+        assert_eq!(loaded.tests.state, domain::TestState::Failing);
+        assert_eq!(loaded.tests.passed, 2);
+        assert_eq!(loaded.tests.failed, 1);
+    }
+
+    #[test]
+    fn load_enrichment_never_enriched_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+        assert!(store
+            .load_enrichment(&domain::PrId::new("never/enriched", 1))
+            .expect("load")
+            .is_none());
+    }
+
+    #[test]
+    fn save_enrichment_replaces_set_for_pr_only() {
+        let mut store = Store::open_in_memory().expect("open store");
+
+        store
+            .save_enrichment(&sample_enrichment("octocat/hello", 7))
+            .expect("save hello v1");
+        let other = sample_enrichment("other/repo", 3);
+        store.save_enrichment(&other).expect("save other");
+
+        // Re-save hello with a wholly different, smaller set.
+        let replacement = domain::PrEnrichment::new(
+            domain::PrId::new("octocat/hello", 7),
+            vec![domain::Review {
+                author: "eve".to_string(),
+                state: "COMMENTED".to_string(),
+                submitted_at: "2026-06-14T05:00:00Z".to_string(),
+            }],
+            Vec::new(),
+            domain::TestSummary {
+                passed: 1,
+                failed: 0,
+                pending: 0,
+                state: domain::TestState::Passing,
+            },
+        );
+        store.save_enrichment(&replacement).expect("save hello v2");
+
+        let hello = store
+            .load_enrichment(&domain::PrId::new("octocat/hello", 7))
+            .expect("load hello")
+            .expect("present");
+        assert_eq!(hello, replacement);
+        assert_eq!(hello.reviews.len(), 1);
+        assert!(hello.comments.is_empty());
+        assert_eq!(hello.tests.state, domain::TestState::Passing);
+
+        // The other PR's enrichment is untouched.
+        let other_loaded = store
+            .load_enrichment(&domain::PrId::new("other/repo", 3))
+            .expect("load other")
+            .expect("present");
+        assert_eq!(other_loaded, other);
+    }
+
+    #[test]
+    fn enrichment_kind_and_state_text_mapping_round_trips() {
+        let mut store = Store::open_in_memory().expect("open store");
+
+        // Exercise every TestState and both CommentKinds through the persistence layer.
+        for (number, state) in [
+            (1, domain::TestState::None),
+            (2, domain::TestState::Pending),
+            (3, domain::TestState::Passing),
+            (4, domain::TestState::Failing),
+        ] {
+            let enrichment = domain::PrEnrichment::new(
+                domain::PrId::new("octocat/hello", number),
+                Vec::new(),
+                vec![
+                    domain::Comment {
+                        author: "a".to_string(),
+                        kind: domain::CommentKind::Issue,
+                        body: "issue".to_string(),
+                        created_at: "t".to_string(),
+                    },
+                    domain::Comment {
+                        author: "b".to_string(),
+                        kind: domain::CommentKind::Review,
+                        body: "review".to_string(),
+                        created_at: "t".to_string(),
+                    },
+                ],
+                domain::TestSummary {
+                    passed: 0,
+                    failed: 0,
+                    pending: 0,
+                    state,
+                },
+            );
+            store.save_enrichment(&enrichment).expect("save");
+
+            let loaded = store
+                .load_enrichment(&domain::PrId::new("octocat/hello", number))
+                .expect("load")
+                .expect("present");
+            assert_eq!(loaded.tests.state, state);
+            assert_eq!(loaded.comments[0].kind, domain::CommentKind::Issue);
+            assert_eq!(loaded.comments[1].kind, domain::CommentKind::Review);
+        }
+
+        // Verify the stored text forms directly.
+        let kind: String = store
+            .connection()
+            .query_row(
+                "SELECT kind FROM comments WHERE repo = 'octocat/hello' AND number = 1 AND idx = 0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read kind text");
+        assert_eq!(kind, "issue");
+        let state_text: String = store
+            .connection()
+            .query_row(
+                "SELECT state FROM pr_tests WHERE repo = 'octocat/hello' AND number = 4",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read state text");
+        assert_eq!(state_text, "failing");
     }
 }

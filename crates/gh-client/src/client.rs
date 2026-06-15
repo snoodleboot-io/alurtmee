@@ -6,8 +6,8 @@ use crate::error::GhError;
 use crate::open_prs_result::OpenPrsResult;
 use crate::pr_outcome::PrOutcome;
 use crate::wire::{
-    WireCheckRunsResponse, WireCombinedStatus, WireComment, WireOrg, WirePullRequest, WireRepo,
-    WireReview, WireUser,
+    WireCheckRunsResponse, WireCombinedStatus, WireComment, WireOrg, WirePrFile, WirePullRequest,
+    WireRepo, WireReview, WireUser,
 };
 
 const USER_AGENT: &str = "alurtmee";
@@ -198,6 +198,26 @@ impl GhClient {
                 .map(|w| w.into_comment(domain::CommentKind::Review)),
         );
         Ok(comments)
+    }
+
+    /// List the file paths a pull request changes
+    /// (`GET /repos/{repo}/pulls/{number}/files?per_page=100`, paginated).
+    ///
+    /// Like the other enrichment fetches, the changed-paths signal is pulled only for *changed*
+    /// PRs, so this is a plain (non-conditional) GET — it does not involve the ETag/304 path.
+    /// `repo` is an `owner/name` slug. Each item is mapped to its `filename`; the returned `Vec`
+    /// preserves GitHub's order.
+    pub async fn list_changed_paths(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<String>, GhError> {
+        let url = format!(
+            "{}/repos/{}/pulls/{}/files?per_page=100",
+            self.base_url, repo, number
+        );
+        let wires: Vec<WirePrFile> = self.get_paginated(url).await?;
+        Ok(wires.into_iter().map(|w| w.filename).collect())
     }
 
     /// Reconcile a PR's CI verdict for its head commit into a [`domain::TestSummary`].
@@ -907,6 +927,78 @@ mod tests {
         assert_eq!(comments[2].kind, domain::CommentKind::Review);
         assert_eq!(comments[2].author, "carol");
         assert_eq!(comments[2].body, "inline nit");
+    }
+
+    // ---- enrichment: list_changed_paths ----
+
+    #[tokio::test]
+    async fn list_changed_paths_returns_both_filenames_and_sends_auth() {
+        let server = MockServer::start().await;
+        let body = r#"[
+            {"filename":"src/auth/login.rs","status":"modified","additions":12,"deletions":3},
+            {"filename":"Cargo.lock","status":"modified","additions":1,"deletions":1}
+        ]"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/files"))
+            .and(query_param("per_page", "100"))
+            .and(header("authorization", "Bearer dummy-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let paths = client.list_changed_paths("octocat/hello", 7).await.unwrap();
+        assert_eq!(paths, vec!["src/auth/login.rs", "Cargo.lock"]);
+    }
+
+    #[tokio::test]
+    async fn list_changed_paths_empty_array_is_empty_vec() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let paths = client.list_changed_paths("octocat/hello", 7).await.unwrap();
+        assert!(paths.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_changed_paths_follows_pagination_across_two_pages() {
+        let server = MockServer::start().await;
+        let next_url = format!("{}/repos/octocat/hello/pulls/7/files?page=2", server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/files"))
+            .and(query_param("page", "2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"[{"filename":"README.md"}]"#),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/files"))
+            .and(query_param("per_page", "100"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Link", format!(r#"<{next_url}>; rel="next""#).as_str())
+                    .set_body_string(
+                        r#"[{"filename":"src/auth/login.rs"},{"filename":"Cargo.lock"}]"#,
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let paths = client.list_changed_paths("octocat/hello", 7).await.unwrap();
+        assert_eq!(
+            paths,
+            vec!["src/auth/login.rs", "Cargo.lock", "README.md"],
+            "should concatenate both pages in order"
+        );
     }
 
     // ---- enrichment: test_summary ----

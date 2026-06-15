@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use crate::error::StoreError;
 
 /// The schema version this build expects after a successful migration.
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 /// Bring `conn` up to [`SCHEMA_VERSION`], applying only the steps not yet present.
 ///
@@ -24,6 +24,8 @@ pub(crate) const SCHEMA_VERSION: i64 = 3;
 ///   open-PR snapshot per repo).
 /// - v3 introduces `reviews`, `comments`, and `pr_tests` (the per-PR enrichment payload: submitted
 ///   reviews, merged comments, and the reconciled CI verdict). `idx` columns preserve list order.
+/// - v4 introduces `corrections` (a per-PR user category override) and `repo_classifier_config`
+///   (the per-repo label map and bot overrides backing the feature-vs-security classifier, AD-5).
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
@@ -49,21 +51,24 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
                  last_modified TEXT
              );
              CREATE TABLE IF NOT EXISTS pull_requests (
-                 repo       TEXT    NOT NULL,
-                 number     INTEGER NOT NULL,
-                 title      TEXT    NOT NULL,
-                 author     TEXT    NOT NULL,
-                 draft      INTEGER NOT NULL,
-                 updated_at TEXT    NOT NULL,
-                 url        TEXT    NOT NULL,
-                 head_sha   TEXT    NOT NULL DEFAULT '',
+                 repo        TEXT    NOT NULL,
+                 number      INTEGER NOT NULL,
+                 title       TEXT    NOT NULL,
+                 author      TEXT    NOT NULL,
+                 draft       INTEGER NOT NULL,
+                 updated_at  TEXT    NOT NULL,
+                 url         TEXT    NOT NULL,
+                 head_sha    TEXT    NOT NULL DEFAULT '',
+                 author_type TEXT    NOT NULL DEFAULT '',
+                 head_ref    TEXT    NOT NULL DEFAULT '',
+                 labels_json TEXT    NOT NULL DEFAULT '[]',
                  PRIMARY KEY (repo, number)
              );
              PRAGMA user_version = 2;",
         )?;
     }
 
-    if version < SCHEMA_VERSION {
+    if version < 3 {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS reviews (
                  repo         TEXT    NOT NULL,
@@ -94,6 +99,23 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
                  PRIMARY KEY (repo, number)
              );
              PRAGMA user_version = 3;",
+        )?;
+    }
+
+    if version < SCHEMA_VERSION {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS corrections (
+                 repo     TEXT    NOT NULL,
+                 number   INTEGER NOT NULL,
+                 category TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number)
+             );
+             CREATE TABLE IF NOT EXISTS repo_classifier_config (
+                 repo               TEXT PRIMARY KEY NOT NULL,
+                 label_map_json     TEXT NOT NULL DEFAULT '{}',
+                 bot_overrides_json TEXT NOT NULL DEFAULT '{}'
+             );
+             PRAGMA user_version = 4;",
         )?;
     }
 
@@ -132,7 +154,9 @@ mod tests {
         assert!(table_exists(&conn, "reviews"));
         assert!(table_exists(&conn, "comments"));
         assert!(table_exists(&conn, "pr_tests"));
-        assert_eq!(user_version(&conn), 3);
+        assert!(table_exists(&conn, "corrections"));
+        assert!(table_exists(&conn, "repo_classifier_config"));
+        assert_eq!(user_version(&conn), 4);
     }
 
     #[test]
@@ -142,13 +166,15 @@ mod tests {
         migrate(&conn).expect("second migrate");
         migrate(&conn).expect("third migrate");
 
-        assert_eq!(user_version(&conn), 3);
+        assert_eq!(user_version(&conn), 4);
         assert!(table_exists(&conn, "config"));
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
         assert!(table_exists(&conn, "reviews"));
         assert!(table_exists(&conn, "comments"));
         assert!(table_exists(&conn, "pr_tests"));
+        assert!(table_exists(&conn, "corrections"));
+        assert!(table_exists(&conn, "repo_classifier_config"));
     }
 
     #[test]
@@ -175,12 +201,14 @@ mod tests {
         migrate(&conn).expect("upgrade v1 -> current");
 
         // Version advanced and the new tables landed.
-        assert_eq!(user_version(&conn), 3);
+        assert_eq!(user_version(&conn), 4);
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
         assert!(table_exists(&conn, "reviews"));
         assert!(table_exists(&conn, "comments"));
         assert!(table_exists(&conn, "pr_tests"));
+        assert!(table_exists(&conn, "corrections"));
+        assert!(table_exists(&conn, "repo_classifier_config"));
 
         // The pre-existing v1 config row survived — the upgrade is non-destructive.
         let value: String = conn
@@ -231,10 +259,9 @@ mod tests {
 
         assert_eq!(user_version(&conn), 2);
 
-        migrate(&conn).expect("upgrade v2 -> v3");
+        migrate(&conn).expect("upgrade v2 -> current");
 
         // Version advanced and the three v3 enrichment tables landed.
-        assert_eq!(user_version(&conn), 3);
         assert!(table_exists(&conn, "reviews"));
         assert!(table_exists(&conn, "comments"));
         assert!(table_exists(&conn, "pr_tests"));
@@ -248,5 +275,50 @@ mod tests {
             )
             .expect("v2 pull_requests row survives");
         assert_eq!(title, "A PR");
+    }
+
+    #[test]
+    fn incremental_upgrade_from_v3_preserves_data_and_adds_v4_tables() {
+        // Simulate a database written by the v3 build: the enrichment tables exist (we seed just
+        // pr_tests here) and user_version is pinned at 3.
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch(
+            "CREATE TABLE pr_tests (
+                 repo    TEXT    NOT NULL,
+                 number  INTEGER NOT NULL,
+                 passed  INTEGER NOT NULL,
+                 failed  INTEGER NOT NULL,
+                 pending INTEGER NOT NULL,
+                 state   TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number)
+             );
+             PRAGMA user_version = 3;",
+        )
+        .expect("seed v3 schema");
+        conn.execute(
+            "INSERT INTO pr_tests (repo, number, passed, failed, pending, state)
+             VALUES ('octocat/hello', 7, 3, 0, 0, 'passing')",
+            [],
+        )
+        .expect("seed v3 pr_tests row");
+
+        assert_eq!(user_version(&conn), 3);
+
+        migrate(&conn).expect("upgrade v3 -> v4");
+
+        // Version advanced and the two v4 classifier-config tables landed.
+        assert_eq!(user_version(&conn), 4);
+        assert!(table_exists(&conn, "corrections"));
+        assert!(table_exists(&conn, "repo_classifier_config"));
+
+        // The pre-existing v3 pr_tests row survived — the upgrade is non-destructive.
+        let passed: i64 = conn
+            .query_row(
+                "SELECT passed FROM pr_tests WHERE repo = 'octocat/hello' AND number = 7",
+                [],
+                |row| row.get(0),
+            )
+            .expect("v3 pr_tests row survives");
+        assert_eq!(passed, 3);
     }
 }

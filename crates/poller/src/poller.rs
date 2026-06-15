@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use domain::{ChangeEvent, PollCadence, PrEnrichment, PullRequest};
+use domain::{
+    classify_category, AuthorKind, ChangeEvent, Classification, ClassificationInput, LabelMap,
+    PollCadence, PrEnrichment, PullRequest,
+};
 use gh_client::{GhClient, PrOutcome};
 use store::{EtagRecord, Store};
 use tokio::sync::mpsc::Sender;
@@ -91,7 +94,7 @@ impl Poller {
                 // Enrichment tier (AD-3): fetch reviews/comments/check-runs ONLY for the PRs the
                 // diff flagged as added/updated. A 304 never reaches here, and unchanged PRs are
                 // skipped, so enrichment work is proportional to what actually changed.
-                let mut enriched = Vec::new();
+                let mut derived = Vec::new();
                 for event in &diff {
                     let pr = match event {
                         ChangeEvent::Added(pr) | ChangeEvent::Updated(pr) => pr,
@@ -99,11 +102,14 @@ impl Poller {
                     };
                     let enrichment = self.enrich_pr(pr).await?;
                     self.store.save_enrichment(&enrichment)?;
-                    enriched.push(ChangeEvent::Enriched(enrichment));
+                    derived.push(ChangeEvent::Enriched(enrichment));
+
+                    let classification = self.classify_pr(pr).await?;
+                    derived.push(ChangeEvent::Classified(classification));
                 }
 
                 outcome.events.extend(diff);
-                outcome.events.extend(enriched);
+                outcome.events.extend(derived);
             }
         }
 
@@ -121,6 +127,36 @@ impl Poller {
         let comments = self.client.list_comments(&pr.id.repo, pr.id.number).await?;
         let tests = self.client.test_summary(&pr.id.repo, &pr.head_sha).await?;
         Ok(PrEnrichment::new(pr.id.clone(), reviews, comments, tests))
+    }
+
+    /// Classify one changed PR (AD-5): fetch its changed paths, load the per-repo label map, bot
+    /// overrides, and any user correction from the store, then run the pure classifiers. `&mut self`
+    /// for the same `Send` reason as [`Self::enrich_pr`].
+    async fn classify_pr(&mut self, pr: &PullRequest) -> Result<Classification, PollError> {
+        let repo = &pr.id.repo;
+        let changed_paths = self.client.list_changed_paths(repo, pr.id.number).await?;
+        let label_map = self
+            .store
+            .load_label_map(repo)?
+            .unwrap_or_else(LabelMap::with_common_defaults);
+        let bot_overrides = self.store.load_bot_overrides(repo)?.unwrap_or_default();
+        let correction = self.store.get_correction(repo, pr.id.number)?;
+
+        let author_kind = AuthorKind::classify(&pr.author, &pr.author_type, &bot_overrides);
+        let input = ClassificationInput {
+            author_login: &pr.author,
+            title: &pr.title,
+            head_ref: &pr.head_ref,
+            labels: &pr.labels,
+            changed_paths: &changed_paths,
+        };
+        let category = classify_category(&input, &label_map, correction);
+
+        Ok(Classification {
+            id: pr.id.clone(),
+            author_kind,
+            category,
+        })
     }
 
     /// Drive the poll loop, streaming each [`ChangeEvent`] over `tx` until the consumer drops the
@@ -207,13 +243,14 @@ mod tests {
         PollCadence::new(Duration::from_millis(20), Duration::from_millis(100))
     }
 
-    /// Mount empty/default responses for every enrichment endpoint so a changed PR enriches
-    /// cleanly. Path-regex matchers cover any PR number / head SHA (including an empty SHA).
+    /// Mount empty/default responses for every enrichment + classification endpoint so a changed
+    /// PR enriches and classifies cleanly. Path-regex matchers cover any PR number / head SHA.
     async fn mount_enrichment_defaults(server: &MockServer) {
         for suffix in [
             r"/reviews$",
             r"/pulls/\d+/comments$",
             r"/issues/\d+/comments$",
+            r"/files$",
         ] {
             Mock::given(method("GET"))
                 .and(path_regex(suffix))
@@ -233,21 +270,24 @@ mod tests {
             .await;
     }
 
-    /// Count events of each kind for concise assertions.
-    fn count_kinds(events: &[ChangeEvent]) -> (usize, usize, usize, usize) {
+    /// Count events of each kind for concise assertions: (added, updated, removed, enriched,
+    /// classified).
+    fn count_kinds(events: &[ChangeEvent]) -> (usize, usize, usize, usize, usize) {
         let mut added = 0;
         let mut updated = 0;
         let mut removed = 0;
         let mut enriched = 0;
+        let mut classified = 0;
         for event in events {
             match event {
                 ChangeEvent::Added(_) => added += 1,
                 ChangeEvent::Updated(_) => updated += 1,
                 ChangeEvent::Removed(_) => removed += 1,
                 ChangeEvent::Enriched(_) => enriched += 1,
+                ChangeEvent::Classified(_) => classified += 1,
             }
         }
-        (added, updated, removed, enriched)
+        (added, updated, removed, enriched, classified)
     }
 
     fn pulls_body() -> &'static str {
@@ -288,9 +328,10 @@ mod tests {
 
         assert!(outcome.changed);
         // Two PRs appear (Added) and each is enriched (Enriched).
-        let (added, _, _, enriched) = count_kinds(&outcome.events);
+        let (added, _, _, enriched, classified) = count_kinds(&outcome.events);
         assert_eq!(added, 2);
         assert_eq!(enriched, 2);
+        assert_eq!(classified, 2, "each changed PR is also classified");
         assert!(matches!(&outcome.events[0], ChangeEvent::Added(p) if p.id.number == 1));
         // The fetched set is now cached.
         assert_eq!(poller.store.load_repo_prs("o/r").unwrap().len(), 2);
@@ -330,6 +371,9 @@ mod tests {
                     updated_at: "t1".to_string(),
                     url: "https://github.com/o/r/pull/1".to_string(),
                     head_sha: String::new(),
+                    author_type: String::new(),
+                    head_ref: String::new(),
+                    labels: Vec::new(),
                 }],
             )
             .unwrap();
@@ -371,6 +415,9 @@ mod tests {
                         updated_at: "t1".to_string(),
                         url: "https://github.com/o/r/pull/1".to_string(),
                         head_sha: String::new(),
+                        author_type: String::new(),
+                        head_ref: String::new(),
+                        labels: Vec::new(),
                     },
                     PullRequest {
                         id: PrId::new("o/r", 2),
@@ -380,6 +427,9 @@ mod tests {
                         updated_at: "t1".to_string(),
                         url: "https://github.com/o/r/pull/2".to_string(),
                         head_sha: String::new(),
+                        author_type: String::new(),
+                        head_ref: String::new(),
+                        labels: Vec::new(),
                     },
                 ],
             )
@@ -396,13 +446,17 @@ mod tests {
             updated_at: "t2".to_string(),
             url: "https://github.com/o/r/pull/1".to_string(),
             head_sha: String::new(),
+            author_type: String::new(),
+            head_ref: String::new(),
+            labels: Vec::new(),
         })));
         assert!(outcome
             .events
             .contains(&ChangeEvent::Removed(PrId::new("o/r", 2))));
         // Only the surviving/changed PR (#1) is enriched; the removed #2 is not.
-        let (_, _, _, enriched) = count_kinds(&outcome.events);
+        let (_, _, _, enriched, classified) = count_kinds(&outcome.events);
         assert_eq!(enriched, 1);
+        assert_eq!(classified, 1, "only the changed PR is classified");
     }
 
     #[tokio::test]

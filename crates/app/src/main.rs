@@ -27,9 +27,12 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use directories::ProjectDirs;
-use domain::{AuthState, ChangeEvent, CommentKind, Org, PollCadence, Repo, TestState, User};
+use domain::{
+    AuthState, AuthorKind, Category, CategoryKind, ChangeEvent, CommentKind, Org, PollCadence,
+    PrId, Repo, TestState, User,
+};
 use gh_client::GhClient;
-use iced::widget::{button, checkbox, column, container, scrollable, text, text_input};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
 use iced::{Element, Subscription, Task};
 use poller::Poller;
 use store::{Keychain, Store};
@@ -69,6 +72,8 @@ enum Message {
     Listed(Result<(Vec<Org>, Vec<Repo>), String>),
     ToggleRepo(String),
     PollEvent(ChangeEvent),
+    /// User corrects a PR's category; persisted as a per-repo override and applied immediately.
+    CorrectCategory(PrId, CategoryKind),
 }
 
 impl Alurtmee {
@@ -172,6 +177,21 @@ impl Alurtmee {
             }
             Message::PollEvent(event) => {
                 self.pr_list.apply(event);
+                Task::none()
+            }
+            Message::CorrectCategory(id, kind) => {
+                // Persist the correction (the next poll re-reads it) and reflect it immediately.
+                if let Err(err) = self.store.set_correction(&id.repo, id.number, kind) {
+                    tracing::error!("failed to persist correction: {err}");
+                }
+                self.pr_list.set_corrected_category(
+                    &id,
+                    Category {
+                        kind,
+                        confidence: 1.0,
+                        signal: "correction".to_string(),
+                    },
+                );
                 Task::none()
             }
         }
@@ -294,12 +314,46 @@ impl Alurtmee {
             .iter()
             .map(|pr| {
                 let draft = if pr.draft { "  · draft" } else { "" };
-                let mut row = column![text(format!(
+                let mut card = column![text(format!(
                     "{}#{}  {}  (@{}){}",
                     pr.id.repo, pr.id.number, pr.title, pr.author, draft
                 ))
                 .size(14)]
                 .spacing(2);
+
+                // Classification chips (source + category) with the firing signal + correction.
+                if let Some(classification) = self.pr_list.classification(&pr.id) {
+                    let source = match classification.author_kind {
+                        AuthorKind::Human => "human",
+                        AuthorKind::Bot => "bot",
+                    };
+                    let category = match classification.category.kind {
+                        CategoryKind::Feature => "feature",
+                        CategoryKind::Security => "security",
+                        CategoryKind::Unknown => "unknown",
+                    };
+                    card = card.push(
+                        text(format!(
+                            "    [{source}] [{category}]  · why: {}",
+                            classification.category.signal
+                        ))
+                        .size(12),
+                    );
+                    card = card.push(
+                        row![
+                            text("    correct:").size(12),
+                            button(text("feature").size(12)).on_press(Message::CorrectCategory(
+                                pr.id.clone(),
+                                CategoryKind::Feature
+                            )),
+                            button(text("security").size(12)).on_press(Message::CorrectCategory(
+                                pr.id.clone(),
+                                CategoryKind::Security
+                            )),
+                        ]
+                        .spacing(6),
+                    );
+                }
 
                 // Detail: test badge, reviews, and merged comment threads (once enriched).
                 if let Some(enrichment) = self.pr_list.enrichment(&pr.id) {
@@ -309,7 +363,7 @@ impl Alurtmee {
                         TestState::Pending => "tests: pending",
                         TestState::None => "tests: none",
                     };
-                    row = row.push(
+                    card = card.push(
                         text(format!(
                             "    {badge} (passed {}, failed {}, pending {}) · {} reviews · {} comments",
                             enrichment.tests.passed,
@@ -321,7 +375,7 @@ impl Alurtmee {
                         .size(12),
                     );
                     for review in &enrichment.reviews {
-                        row = row.push(
+                        card = card.push(
                             text(format!("      review @{}: {}", review.author, review.state))
                                 .size(12),
                         );
@@ -332,13 +386,13 @@ impl Alurtmee {
                             CommentKind::Review => "review",
                         };
                         let preview: String = comment.body.chars().take(80).collect();
-                        row = row.push(
+                        card = card.push(
                             text(format!("      {kind} @{}: {preview}", comment.author)).size(12),
                         );
                     }
                 }
 
-                row.into()
+                card.into()
             })
             .collect();
 

@@ -126,10 +126,13 @@ impl Store {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO pull_requests
-                     (repo, number, title, author, draft, updated_at, url, head_sha)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     (repo, number, title, author, draft, updated_at, url, head_sha,
+                      author_type, head_ref, labels_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;
             for pr in prs {
+                let labels_json = serde_json::to_string(&pr.labels)
+                    .map_err(|e| StoreError::Decode(e.to_string()))?;
                 stmt.execute(params![
                     repo,
                     pr.id.number,
@@ -139,6 +142,9 @@ impl Store {
                     pr.updated_at,
                     pr.url,
                     pr.head_sha,
+                    pr.author_type,
+                    pr.head_ref,
+                    labels_json,
                 ])?;
             }
         }
@@ -151,7 +157,8 @@ impl Store {
     /// Returns an empty `Vec` for a repo that has never been cached.
     pub fn load_repo_prs(&self, repo: &str) -> Result<Vec<domain::PullRequest>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT number, title, author, draft, updated_at, url, head_sha
+            "SELECT number, title, author, draft, updated_at, url, head_sha,
+                    author_type, head_ref, labels_json
              FROM pull_requests
              WHERE repo = ?1
              ORDER BY number",
@@ -159,6 +166,7 @@ impl Store {
         let rows = stmt.query_map(params![repo], |row| {
             let number: u64 = row.get(0)?;
             let draft: i64 = row.get(3)?;
+            let labels_json: String = row.get(9)?;
             Ok(domain::PullRequest {
                 id: domain::PrId::new(repo, number),
                 title: row.get(1)?,
@@ -167,6 +175,9 @@ impl Store {
                 updated_at: row.get(4)?,
                 url: row.get(5)?,
                 head_sha: row.get(6)?,
+                author_type: row.get(7)?,
+                head_ref: row.get(8)?,
+                labels: serde_json::from_str(&labels_json).unwrap_or_default(),
             })
         })?;
 
@@ -328,6 +339,138 @@ impl Store {
             comments,
             tests,
         )))
+    }
+
+    /// Insert or overwrite the user's per-PR category override.
+    ///
+    /// The category is stored as text via `serde_json`, which serializes a [`domain::CategoryKind`]
+    /// to a bare quoted string (`"feature"`/`"security"`/`"unknown"`); [`get_correction`] parses it
+    /// back symmetrically. Only this enum value is written — never a token (ARD AD-6).
+    ///
+    /// [`get_correction`]: Self::get_correction
+    pub fn set_correction(
+        &self,
+        repo: &str,
+        number: u64,
+        kind: domain::CategoryKind,
+    ) -> Result<(), StoreError> {
+        let category =
+            serde_json::to_string(&kind).map_err(|e| StoreError::Decode(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO corrections (repo, number, category) VALUES (?1, ?2, ?3)
+             ON CONFLICT(repo, number) DO UPDATE SET category = excluded.category",
+            params![repo, number, category],
+        )?;
+        Ok(())
+    }
+
+    /// Read the user's category override for a PR, returning `None` if none was set.
+    ///
+    /// An unparseable stored value maps to [`StoreError::Decode`].
+    pub fn get_correction(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> Result<Option<domain::CategoryKind>, StoreError> {
+        let category: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT category FROM corrections WHERE repo = ?1 AND number = ?2",
+                params![repo, number],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match category {
+            None => Ok(None),
+            Some(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string())),
+        }
+    }
+
+    /// Remove the user's category override for a PR.
+    ///
+    /// Deleting an absent row is a no-op and returns `Ok`.
+    pub fn clear_correction(&self, repo: &str, number: u64) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM corrections WHERE repo = ?1 AND number = ?2",
+            params![repo, number],
+        )?;
+        Ok(())
+    }
+
+    /// Insert or overwrite the per-repo label map.
+    ///
+    /// Touches only `label_map_json`, leaving any stored bot overrides for the same repo intact.
+    pub fn save_label_map(&self, repo: &str, map: &domain::LabelMap) -> Result<(), StoreError> {
+        let json = serde_json::to_string(map).map_err(|e| StoreError::Decode(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO repo_classifier_config (repo, label_map_json) VALUES (?1, ?2)
+             ON CONFLICT(repo) DO UPDATE SET label_map_json = excluded.label_map_json",
+            params![repo, json],
+        )?;
+        Ok(())
+    }
+
+    /// Load the per-repo label map, returning `None` if the repo has no config row.
+    ///
+    /// Malformed stored JSON maps to [`StoreError::Decode`].
+    pub fn load_label_map(&self, repo: &str) -> Result<Option<domain::LabelMap>, StoreError> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT label_map_json FROM repo_classifier_config WHERE repo = ?1",
+                params![repo],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            None => Ok(None),
+            Some(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string())),
+        }
+    }
+
+    /// Insert or overwrite the per-repo bot overrides.
+    ///
+    /// Touches only `bot_overrides_json`, leaving any stored label map for the same repo intact.
+    pub fn save_bot_overrides(
+        &self,
+        repo: &str,
+        overrides: &domain::BotOverrides,
+    ) -> Result<(), StoreError> {
+        let json =
+            serde_json::to_string(overrides).map_err(|e| StoreError::Decode(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO repo_classifier_config (repo, bot_overrides_json) VALUES (?1, ?2)
+             ON CONFLICT(repo) DO UPDATE SET bot_overrides_json = excluded.bot_overrides_json",
+            params![repo, json],
+        )?;
+        Ok(())
+    }
+
+    /// Load the per-repo bot overrides, returning `None` if the repo has no config row.
+    ///
+    /// Malformed stored JSON maps to [`StoreError::Decode`].
+    pub fn load_bot_overrides(
+        &self,
+        repo: &str,
+    ) -> Result<Option<domain::BotOverrides>, StoreError> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT bot_overrides_json FROM repo_classifier_config WHERE repo = ?1",
+                params![repo],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            None => Ok(None),
+            Some(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string())),
+        }
     }
 }
 
@@ -494,6 +637,9 @@ mod tests {
             updated_at: "2026-06-14T00:00:00Z".to_string(),
             url: format!("https://github.com/{repo}/pull/{number}"),
             head_sha: String::new(),
+            author_type: String::new(),
+            head_ref: String::new(),
+            labels: Vec::new(),
         }
     }
 
@@ -647,7 +793,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 3);
+        assert_eq!(version, migration::SCHEMA_VERSION);
     }
 
     fn sample_enrichment(repo: &str, number: u64) -> domain::PrEnrichment {
@@ -830,5 +976,231 @@ mod tests {
             )
             .expect("read state text");
         assert_eq!(state_text, "failing");
+    }
+
+    #[test]
+    fn migration_creates_classifier_config_tables() {
+        let store = Store::open_in_memory().expect("open + migrate");
+
+        for table in ["corrections", "repo_classifier_config"] {
+            let found: Option<String> = store
+                .connection()
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .optional()
+                .expect("query sqlite_master");
+            assert_eq!(found.as_deref(), Some(table));
+        }
+
+        let version: i64 = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version");
+        assert_eq!(version, 4);
+    }
+
+    #[test]
+    fn correction_round_trip_for_each_kind() {
+        let store = Store::open_in_memory().expect("open store");
+
+        for (number, kind) in [
+            (1, domain::CategoryKind::Feature),
+            (2, domain::CategoryKind::Security),
+            (3, domain::CategoryKind::Unknown),
+        ] {
+            store
+                .set_correction("octocat/hello", number, kind)
+                .expect("set correction");
+            assert_eq!(
+                store
+                    .get_correction("octocat/hello", number)
+                    .expect("get correction"),
+                Some(kind)
+            );
+        }
+
+        // The stored text form is the bare serde value (no surrounding object).
+        let text: String = store
+            .connection()
+            .query_row(
+                "SELECT category FROM corrections WHERE repo = 'octocat/hello' AND number = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read category text");
+        assert_eq!(text, "\"feature\"");
+    }
+
+    #[test]
+    fn set_correction_upsert_overwrites() {
+        let store = Store::open_in_memory().expect("open store");
+
+        store
+            .set_correction("octocat/hello", 7, domain::CategoryKind::Feature)
+            .expect("set");
+        store
+            .set_correction("octocat/hello", 7, domain::CategoryKind::Security)
+            .expect("overwrite");
+
+        assert_eq!(
+            store.get_correction("octocat/hello", 7).expect("get"),
+            Some(domain::CategoryKind::Security)
+        );
+    }
+
+    #[test]
+    fn get_correction_absent_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+        assert_eq!(
+            store.get_correction("never/corrected", 1).expect("get"),
+            None
+        );
+    }
+
+    #[test]
+    fn get_correction_rejects_malformed_value() {
+        let store = Store::open_in_memory().expect("open store");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO corrections (repo, number, category)
+                 VALUES ('octocat/hello', 9, 'not-a-category')",
+                [],
+            )
+            .expect("seed bad value");
+
+        let err = store
+            .get_correction("octocat/hello", 9)
+            .expect_err("decode should fail");
+        assert!(matches!(err, StoreError::Decode(_)));
+    }
+
+    #[test]
+    fn clear_correction_removes_and_is_noop_when_absent() {
+        let store = Store::open_in_memory().expect("open store");
+
+        // Clearing an absent PR is a no-op and returns Ok.
+        store
+            .clear_correction("octocat/hello", 7)
+            .expect("clear absent is ok");
+
+        store
+            .set_correction("octocat/hello", 7, domain::CategoryKind::Security)
+            .expect("set");
+        store
+            .clear_correction("octocat/hello", 7)
+            .expect("clear present");
+        assert_eq!(store.get_correction("octocat/hello", 7).expect("get"), None);
+    }
+
+    #[test]
+    fn label_map_round_trip_and_absent_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+
+        assert_eq!(
+            store
+                .load_label_map("never/configured")
+                .expect("load absent"),
+            None
+        );
+
+        let map = domain::LabelMap::with_common_defaults();
+        store.save_label_map("octocat/hello", &map).expect("save");
+        assert_eq!(
+            store.load_label_map("octocat/hello").expect("load"),
+            Some(map)
+        );
+    }
+
+    #[test]
+    fn load_label_map_rejects_malformed_json() {
+        let store = Store::open_in_memory().expect("open store");
+        store
+            .connection()
+            .execute(
+                "INSERT INTO repo_classifier_config (repo, label_map_json)
+                 VALUES ('octocat/hello', '{ not valid json')",
+                [],
+            )
+            .expect("seed bad json");
+
+        let err = store
+            .load_label_map("octocat/hello")
+            .expect_err("decode should fail");
+        assert!(matches!(err, StoreError::Decode(_)));
+    }
+
+    #[test]
+    fn bot_overrides_round_trip_and_absent_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+
+        assert_eq!(
+            store
+                .load_bot_overrides("never/configured")
+                .expect("load absent"),
+            None
+        );
+
+        let mut overrides = domain::BotOverrides::new();
+        overrides.force_bot("x").force_human("y");
+        store
+            .save_bot_overrides("octocat/hello", &overrides)
+            .expect("save");
+        assert_eq!(
+            store.load_bot_overrides("octocat/hello").expect("load"),
+            Some(overrides)
+        );
+    }
+
+    #[test]
+    fn label_map_and_bot_overrides_are_independent() {
+        let store = Store::open_in_memory().expect("open store");
+
+        let map = domain::LabelMap::with_common_defaults();
+        store
+            .save_label_map("octocat/hello", &map)
+            .expect("save map");
+
+        let mut overrides = domain::BotOverrides::new();
+        overrides.force_bot("dependabot[bot]");
+        store
+            .save_bot_overrides("octocat/hello", &overrides)
+            .expect("save overrides");
+
+        // Both upserts touched a single column each, so neither clobbered the other.
+        assert_eq!(
+            store.load_label_map("octocat/hello").expect("load map"),
+            Some(map)
+        );
+        assert_eq!(
+            store
+                .load_bot_overrides("octocat/hello")
+                .expect("load overrides"),
+            Some(overrides)
+        );
+
+        // Order-independence: saving overrides first, then a map, also preserves both.
+        let mut overrides2 = domain::BotOverrides::new();
+        overrides2.force_human("real-person");
+        store
+            .save_bot_overrides("other/repo", &overrides2)
+            .expect("save overrides first");
+        let mut map2 = domain::LabelMap::new();
+        map2.insert("regression", domain::CategoryKind::Security);
+        store
+            .save_label_map("other/repo", &map2)
+            .expect("save map second");
+
+        assert_eq!(
+            store.load_bot_overrides("other/repo").expect("load"),
+            Some(overrides2)
+        );
+        assert_eq!(
+            store.load_label_map("other/repo").expect("load"),
+            Some(map2)
+        );
     }
 }

@@ -5,9 +5,10 @@ use serde::de::DeserializeOwned;
 use crate::error::GhError;
 use crate::open_prs_result::OpenPrsResult;
 use crate::pr_outcome::PrOutcome;
+use crate::rfc3339::parse_rfc3339_to_epoch;
 use crate::wire::{
     WireCheckRunsResponse, WireCombinedStatus, WireComment, WireOrg, WirePrFile, WirePullRequest,
-    WireRepo, WireReview, WireUser,
+    WireRepo, WireReview, WireUser, WireWorkflowRun, WireWorkflowRunsResponse,
 };
 
 const USER_AGENT: &str = "alurtmee";
@@ -255,6 +256,29 @@ impl GhClient {
         ))
     }
 
+    /// List a repository's recent GitHub Actions workflow runs as [`domain::WorkflowRun`]s
+    /// (`GET /repos/{repo}/actions/runs?per_page=50`).
+    ///
+    /// GitHub returns an object envelope `{ total_count, workflow_runs }` (not a bare array), so this
+    /// decodes via [`get_json`](Self::get_json) rather than the paginated helper. Each run's
+    /// `duration_secs` is derived from its `run_started_at`/`updated_at` RFC3339 timestamps:
+    /// `max(0, updated - started)` when both parse, else `0`. `conclusion` is passed through (GitHub
+    /// sets it only once a run completes), so in-progress runs surface as `conclusion: None` with a
+    /// zero duration. `repo` is an `owner/name` slug.
+    pub async fn list_workflow_runs(
+        &self,
+        repo: &str,
+    ) -> Result<Vec<domain::WorkflowRun>, GhError> {
+        // TODO(phase-later): paginate /actions/runs (a single 50-run page is enough for Phase 5).
+        let url = format!("{}/repos/{}/actions/runs?per_page=50", self.base_url, repo);
+        let resp: WireWorkflowRunsResponse = self.get_json(&url).await?;
+        Ok(resp
+            .workflow_runs
+            .into_iter()
+            .map(|w| map_workflow_run(w, repo))
+            .collect())
+    }
+
     /// Issue a conditional GET, applying the standard headers plus `If-None-Match` when `etag` is
     /// `Some`. Unlike [`send`](Self::send) this tolerates `304 Not Modified`: a 304 is neither a
     /// 2xx success nor an error here, so it is passed through to the caller. Genuine error statuses
@@ -314,6 +338,29 @@ impl GhClient {
             out.extend(page);
         }
         Ok(out)
+    }
+}
+
+/// Map a GitHub workflow-run DTO onto a [`domain::WorkflowRun`], deriving its wall-clock duration.
+///
+/// `repo` is the slug the runs were fetched for (GitHub's per-run repository object is not modelled).
+/// `duration_secs` is `max(0, updated_at - run_started_at)` when both timestamps parse, otherwise `0`
+/// — so in-progress runs (missing `updated_at`, or with a `conclusion` of `null`) carry a zero
+/// duration. The negative-difference clamp guards against clock skew in GitHub's timestamps.
+fn map_workflow_run(w: WireWorkflowRun, repo: &str) -> domain::WorkflowRun {
+    let duration_secs = match (
+        w.run_started_at.as_deref().and_then(parse_rfc3339_to_epoch),
+        w.updated_at.as_deref().and_then(parse_rfc3339_to_epoch),
+    ) {
+        (Some(started), Some(updated)) => (updated - started).max(0) as u64,
+        _ => 0,
+    };
+    domain::WorkflowRun {
+        id: w.id,
+        repo: repo.to_string(),
+        workflow: w.name,
+        conclusion: w.conclusion,
+        duration_secs,
     }
 }
 
@@ -1060,6 +1107,130 @@ mod tests {
         assert_eq!(summary.state, domain::TestState::Passing);
         assert_eq!(summary.passed, 2);
         assert_eq!(summary.failed, 0);
+    }
+
+    // ---- Actions timing: list_workflow_runs ----
+
+    fn workflow_runs_body() -> &'static str {
+        // One fast (~30s), one slow (~1200s), one in-progress (no conclusion, missing updated_at),
+        // one failed (~45s). Each carries extra fields the DTO must tolerate.
+        r#"{
+            "total_count": 4,
+            "workflow_runs": [
+                {"id":1,"name":"CI","status":"completed","conclusion":"success",
+                 "run_started_at":"2026-06-15T00:00:00Z","updated_at":"2026-06-15T00:00:30Z",
+                 "event":"push"},
+                {"id":2,"name":"Release","status":"completed","conclusion":"success",
+                 "run_started_at":"2026-06-15T01:00:00Z","updated_at":"2026-06-15T01:20:00Z"},
+                {"id":3,"name":"CI","status":"in_progress","conclusion":null,
+                 "run_started_at":"2026-06-15T02:00:00Z"},
+                {"id":4,"name":"Nightly","status":"completed","conclusion":"failure",
+                 "run_started_at":"2026-06-15T03:00:00Z","updated_at":"2026-06-15T03:00:45Z"}
+            ]
+        }"#
+    }
+
+    #[tokio::test]
+    async fn list_workflow_runs_computes_durations_and_sends_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/actions/runs"))
+            .and(query_param("per_page", "50"))
+            .and(header("authorization", "Bearer dummy-token"))
+            .and(header("user-agent", "alurtmee"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(workflow_runs_body()))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let runs = client.list_workflow_runs("octocat/hello").await.unwrap();
+        assert_eq!(runs.len(), 4);
+
+        // repo is the argument, workflow is the run name.
+        assert!(runs.iter().all(|r| r.repo == "octocat/hello"));
+
+        let fast = &runs[0];
+        assert_eq!(fast.id, 1);
+        assert_eq!(fast.workflow, "CI");
+        assert_eq!(fast.conclusion.as_deref(), Some("success"));
+        assert_eq!(fast.duration_secs, 30);
+
+        let slow = &runs[1];
+        assert_eq!(slow.workflow, "Release");
+        assert_eq!(slow.duration_secs, 1200);
+
+        let in_progress = &runs[2];
+        assert_eq!(in_progress.conclusion, None);
+        assert_eq!(in_progress.duration_secs, 0, "missing updated_at → 0");
+
+        let failed = &runs[3];
+        assert_eq!(failed.conclusion.as_deref(), Some("failure"));
+        assert_eq!(failed.duration_secs, 45);
+    }
+
+    #[tokio::test]
+    async fn list_workflow_runs_empty_envelope_is_empty_vec() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/actions/runs"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"total_count":0,"workflow_runs":[]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let runs = client.list_workflow_runs("octocat/hello").await.unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_workflow_runs_maps_unauthorized() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/actions/runs"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "bad-token").unwrap();
+        let err = client
+            .list_workflow_runs("octocat/hello")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GhError::Unauthorized));
+    }
+
+    #[test]
+    fn map_workflow_run_clamps_negative_duration_to_zero() {
+        // updated_at before run_started_at (clock skew) must not underflow.
+        let w = WireWorkflowRun {
+            id: 9,
+            name: "CI".to_string(),
+            status: "completed".to_string(),
+            conclusion: Some("success".to_string()),
+            run_started_at: Some("2026-06-15T00:00:30Z".to_string()),
+            updated_at: Some("2026-06-15T00:00:00Z".to_string()),
+        };
+        let run = map_workflow_run(w, "octocat/hello");
+        assert_eq!(run.duration_secs, 0);
+        assert_eq!(run.repo, "octocat/hello");
+    }
+
+    #[test]
+    fn map_workflow_run_zero_when_a_timestamp_is_missing() {
+        let w = WireWorkflowRun {
+            id: 10,
+            name: "CI".to_string(),
+            status: "queued".to_string(),
+            conclusion: None,
+            run_started_at: None,
+            updated_at: Some("2026-06-15T00:00:00Z".to_string()),
+        };
+        let run = map_workflow_run(w, "octocat/hello");
+        assert_eq!(run.duration_secs, 0);
+        assert_eq!(run.conclusion, None);
     }
 
     #[tokio::test]

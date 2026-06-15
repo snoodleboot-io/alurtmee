@@ -19,9 +19,12 @@
 //! by the headless window smoke test and the end-to-end acceptance test in `tests/`.
 
 mod demo;
+mod notification_dispatcher;
+mod notifier;
 mod pr_list_model;
 mod settings_model;
 mod telemetry;
+mod xdg_notifier;
 
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
@@ -37,8 +40,10 @@ use iced::{Element, Subscription, Task};
 use poller::Poller;
 use store::{Keychain, Store};
 
+use crate::notification_dispatcher::NotificationDispatcher;
 use crate::pr_list_model::PrListModel;
 use crate::settings_model::SettingsModel;
+use crate::xdg_notifier::XdgNotifier;
 
 /// Default GitHub REST base URL. Overridable via `ALURTMEE_GITHUB_BASE_URL` so the deferred live
 /// Integration Verification pass (and tests) can point at a mock server without code changes.
@@ -58,6 +63,8 @@ struct Alurtmee {
     base_url: String,
     /// Built once a token is accepted; holds the token internally (redacted in `Debug`).
     client: Option<GhClient>,
+    /// Fires desktop notifications for CI alerts, de-duped per (run, kind).
+    dispatcher: NotificationDispatcher<XdgNotifier>,
 }
 
 /// Messages that drive state transitions.
@@ -104,6 +111,7 @@ impl Alurtmee {
             store,
             base_url,
             client: None,
+            dispatcher: NotificationDispatcher::new(XdgNotifier),
         };
         (app, Task::none())
     }
@@ -176,6 +184,10 @@ impl Alurtmee {
                 Task::none()
             }
             Message::PollEvent(event) => {
+                // Fire a desktop notification for CI alerts (de-duped inside the dispatcher).
+                if let ChangeEvent::CiAlert(alert) = &event {
+                    self.dispatcher.dispatch(alert);
+                }
                 self.pr_list.apply(event);
                 Task::none()
             }
@@ -302,6 +314,21 @@ impl Alurtmee {
             })
             .collect();
 
+        let ci_alerts: Vec<Element<Message>> = self
+            .pr_list
+            .ci_alerts()
+            .iter()
+            .map(|alert| {
+                let tag = match alert.kind {
+                    domain::CiAlertKind::Failure => "FAILED",
+                    domain::CiAlertKind::SlowCi => "SLOW",
+                };
+                text(format!("  [{tag}] {} · {}", alert.repo, alert.reason))
+                    .size(12)
+                    .into()
+            })
+            .collect();
+
         let pr_header = if self.pr_list.is_empty() {
             "Open pull requests — none yet".to_string()
         } else {
@@ -410,6 +437,8 @@ impl Alurtmee {
             ))
             .size(14),
             scrollable(column(repos).spacing(4)),
+            text(format!("CI alerts ({})", self.pr_list.ci_alerts().len())).size(18),
+            column(ci_alerts).spacing(2),
             text(pr_header).size(18),
             scrollable(column(pr_rows).spacing(4)),
         ]

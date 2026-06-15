@@ -1,0 +1,44 @@
+{
+  "total_count": 4,
+  "workflow_runs": [
+    {
+      "id": 101,
+      "name": "CI",
+      "status": "completed",
+      "conclusion": "success",
+      "run_started_at": "2026-06-15T08:00:00Z",
+      "updated_at": "2026-06-15T08:00:30Z",
+      "head_branch": "main",
+      "event": "push"
+    },
+    {
+      "id": 102,
+      "name": "Release",
+      "status": "completed",
+      "conclusion": "success",
+      "run_started_at": "2026-06-15T09:00:00Z",
+      "updated_at": "2026-06-15T09:20:00Z",
+      "head_branch": "main",
+      "event": "workflow_dispatch"
+    },
+    {
+      "id": 103,
+      "name": "CI",
+      "status": "in_progress",
+      "conclusion": null,
+      "run_started_at": "2026-06-15T10:00:00Z",
+      "head_branch": "feature",
+      "event": "pull_request"
+    },
+    {
+      "id": 104,
+      "name": "Nightly",
+      "status": "completed",
+      "conclusion": "failure",
+      "run_started_at": "2026-06-15T03:00:00Z",
+      "updated_at": "2026-06-15T03:00:45Z",
+      "head_branch": "main",
+      "event": "schedule"
+    }
+  ]
+}

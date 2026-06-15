@@ -5,8 +5,8 @@
 //! the product flow: nothing here runs unless `ALURTMEE_DEMO` is set.
 
 use domain::{
-    AuthorKind, Category, CategoryKind, ChangeEvent, Classification, Comment, CommentKind,
-    PrEnrichment, PrId, PullRequest, Review, TestState, TestSummary,
+    AuthorKind, Category, CategoryKind, ChangeEvent, CiAlert, CiAlertKind, Classification, Comment,
+    CommentKind, PrEnrichment, PrId, PullRequest, Review, TestState, TestSummary,
 };
 
 /// Build a demo classification verdict.
@@ -123,5 +123,20 @@ pub fn demo_events() -> Vec<ChangeEvent> {
             CategoryKind::Security,
             "dependabot",
         )),
+        ChangeEvent::CiAlert(CiAlert {
+            repo: "octocat/hello".to_string(),
+            workflow: "CI".to_string(),
+            run_id: 9001,
+            kind: CiAlertKind::Failure,
+            reason: "CI concluded failure".to_string(),
+        }),
+        ChangeEvent::CiAlert(CiAlert {
+            repo: "octocat/hello".to_string(),
+            workflow: "Integration".to_string(),
+            run_id: 9002,
+            kind: CiAlertKind::SlowCi,
+            reason: "Integration ran 540s — over the p90 baseline of 300s (last 12 runs)"
+                .to_string(),
+        }),
     ]
 }

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use domain::{ChangeEvent, Classification, PrEnrichment, PrId, PullRequest};
+use domain::{ChangeEvent, CiAlert, Classification, PrEnrichment, PrId, PullRequest};
 
 /// The UI's view of currently-open pull requests plus their enrichment and classification,
 /// maintained incrementally from [`ChangeEvent`]s.
@@ -14,6 +14,7 @@ pub struct PrListModel {
     prs: Vec<PullRequest>,
     enrichments: BTreeMap<PrId, PrEnrichment>,
     classifications: BTreeMap<PrId, Classification>,
+    ci_alerts: Vec<CiAlert>,
 }
 
 impl PrListModel {
@@ -35,6 +36,11 @@ impl PrListModel {
     /// The classification verdict for a PR, if it has been computed yet.
     pub fn classification(&self, id: &PrId) -> Option<&Classification> {
         self.classifications.get(id)
+    }
+
+    /// CI alerts (slow / failed runs) seen this session, most recent last.
+    pub fn ci_alerts(&self) -> &[CiAlert] {
+        &self.ci_alerts
     }
 
     /// Number of open pull requests currently shown.
@@ -77,6 +83,10 @@ impl PrListModel {
             ChangeEvent::Classified(classification) => {
                 self.classifications
                     .insert(classification.id.clone(), classification);
+            }
+            ChangeEvent::CiAlert(alert) => {
+                // The poller only emits an alert once per (run, kind), so we just append.
+                self.ci_alerts.push(alert);
             }
         }
         self.prs.sort_by(|a, b| a.id.cmp(&b.id));

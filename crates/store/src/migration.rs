@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use crate::error::StoreError;
 
 /// The schema version this build expects after a successful migration.
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 /// Bring `conn` up to [`SCHEMA_VERSION`], applying only the steps not yet present.
 ///
@@ -26,6 +26,8 @@ pub(crate) const SCHEMA_VERSION: i64 = 4;
 ///   reviews, merged comments, and the reconciled CI verdict). `idx` columns preserve list order.
 /// - v4 introduces `corrections` (a per-PR user category override) and `repo_classifier_config`
 ///   (the per-repo label map and bot overrides backing the feature-vs-security classifier, AD-5).
+/// - v5 introduces `ci_runs` (recorded workflow-run outcomes per repo, keyed by `(repo, run_id)`),
+///   backing recent-duration lookups for completed runs.
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
@@ -102,7 +104,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
         )?;
     }
 
-    if version < SCHEMA_VERSION {
+    if version < 4 {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS corrections (
                  repo     TEXT    NOT NULL,
@@ -116,6 +118,20 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
                  bot_overrides_json TEXT NOT NULL DEFAULT '{}'
              );
              PRAGMA user_version = 4;",
+        )?;
+    }
+
+    if version < SCHEMA_VERSION {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ci_runs (
+                 repo          TEXT    NOT NULL,
+                 run_id        INTEGER NOT NULL,
+                 workflow      TEXT    NOT NULL,
+                 conclusion    TEXT,
+                 duration_secs INTEGER NOT NULL,
+                 PRIMARY KEY (repo, run_id)
+             );
+             PRAGMA user_version = 5;",
         )?;
     }
 
@@ -156,7 +172,8 @@ mod tests {
         assert!(table_exists(&conn, "pr_tests"));
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
-        assert_eq!(user_version(&conn), 4);
+        assert!(table_exists(&conn, "ci_runs"));
+        assert_eq!(user_version(&conn), 5);
     }
 
     #[test]
@@ -166,7 +183,7 @@ mod tests {
         migrate(&conn).expect("second migrate");
         migrate(&conn).expect("third migrate");
 
-        assert_eq!(user_version(&conn), 4);
+        assert_eq!(user_version(&conn), 5);
         assert!(table_exists(&conn, "config"));
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
@@ -175,6 +192,7 @@ mod tests {
         assert!(table_exists(&conn, "pr_tests"));
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
+        assert!(table_exists(&conn, "ci_runs"));
     }
 
     #[test]
@@ -201,7 +219,7 @@ mod tests {
         migrate(&conn).expect("upgrade v1 -> current");
 
         // Version advanced and the new tables landed.
-        assert_eq!(user_version(&conn), 4);
+        assert_eq!(user_version(&conn), 5);
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
         assert!(table_exists(&conn, "reviews"));
@@ -209,6 +227,7 @@ mod tests {
         assert!(table_exists(&conn, "pr_tests"));
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
+        assert!(table_exists(&conn, "ci_runs"));
 
         // The pre-existing v1 config row survived — the upgrade is non-destructive.
         let value: String = conn
@@ -304,10 +323,10 @@ mod tests {
 
         assert_eq!(user_version(&conn), 3);
 
-        migrate(&conn).expect("upgrade v3 -> v4");
+        migrate(&conn).expect("upgrade v3 -> current");
 
-        // Version advanced and the two v4 classifier-config tables landed.
-        assert_eq!(user_version(&conn), 4);
+        // Version advanced to current and the two v4 classifier-config tables landed.
+        assert_eq!(user_version(&conn), 5);
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
 
@@ -320,5 +339,46 @@ mod tests {
             )
             .expect("v3 pr_tests row survives");
         assert_eq!(passed, 3);
+    }
+
+    #[test]
+    fn incremental_upgrade_from_v4_preserves_data_and_adds_ci_runs() {
+        // Simulate a database written by the v4 build: the classifier-config tables exist (we seed
+        // just corrections here) and user_version is pinned at 4.
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch(
+            "CREATE TABLE corrections (
+                 repo     TEXT    NOT NULL,
+                 number   INTEGER NOT NULL,
+                 category TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number)
+             );
+             PRAGMA user_version = 4;",
+        )
+        .expect("seed v4 schema");
+        conn.execute(
+            "INSERT INTO corrections (repo, number, category)
+             VALUES ('octocat/hello', 7, '\"feature\"')",
+            [],
+        )
+        .expect("seed v4 corrections row");
+
+        assert_eq!(user_version(&conn), 4);
+
+        migrate(&conn).expect("upgrade v4 -> v5");
+
+        // Version advanced and the v5 ci_runs table landed.
+        assert_eq!(user_version(&conn), 5);
+        assert!(table_exists(&conn, "ci_runs"));
+
+        // The pre-existing v4 corrections row survived — the upgrade is non-destructive.
+        let category: String = conn
+            .query_row(
+                "SELECT category FROM corrections WHERE repo = 'octocat/hello' AND number = 7",
+                [],
+                |row| row.get(0),
+            )
+            .expect("v4 corrections row survives");
+        assert_eq!(category, "\"feature\"");
     }
 }

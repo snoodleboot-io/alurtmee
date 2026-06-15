@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use domain::{
-    classify_category, AuthorKind, ChangeEvent, Classification, ClassificationInput, LabelMap,
-    PollCadence, PrEnrichment, PullRequest,
+    classify_category, flag_slow, AuthorKind, ChangeEvent, CiAlert, CiAlertKind, Classification,
+    ClassificationInput, LabelMap, PollCadence, PrEnrichment, PullRequest, SlowCiConfig,
 };
 use gh_client::{GhClient, PrOutcome};
 use store::{EtagRecord, Store};
@@ -11,6 +11,9 @@ use tokio::sync::mpsc::Sender;
 use crate::diff::diff_pull_requests;
 use crate::poll_error::PollError;
 use crate::poll_outcome::PollOutcome;
+
+/// How many recent completed runs per `(repo, workflow)` feed the slow-CI baseline.
+const BASELINE_WINDOW: usize = 20;
 
 /// The two-tier poller (ARD AD-3).
 ///
@@ -29,6 +32,7 @@ pub struct Poller {
     client: GhClient,
     store: Store,
     cadence: PollCadence,
+    slow_ci: SlowCiConfig,
 }
 
 impl Poller {
@@ -38,6 +42,7 @@ impl Poller {
             client,
             store,
             cadence,
+            slow_ci: SlowCiConfig::default(),
         }
     }
 
@@ -111,6 +116,13 @@ impl Poller {
                 outcome.events.extend(diff);
                 outcome.events.extend(derived);
             }
+
+            // CI-timing tier: surface slow / failed Actions runs. Best-effort — a failure here
+            // (e.g. Actions disabled on the repo) must not sink the rest of the poll cycle.
+            match self.poll_ci_timing(repo).await {
+                Ok(mut alerts) => outcome.events.append(&mut alerts),
+                Err(err) => tracing::warn!("ci-timing fetch failed for {repo}: {err}"),
+            }
         }
 
         Ok(outcome)
@@ -157,6 +169,55 @@ impl Poller {
             author_kind,
             category,
         })
+    }
+
+    /// Fetch the repo's recent Actions runs and emit a [`ChangeEvent::CiAlert`] for each newly-seen
+    /// completed run that failed or ran slower than its rolling baseline.
+    ///
+    /// De-dupe is at the source: a run is recorded once (`record_run` reports novelty), so each run
+    /// alerts at most once across cycles. The slow baseline is computed from the prior history
+    /// (fetched *before* recording the current run), so a run is never compared against itself.
+    async fn poll_ci_timing(&mut self, repo: &str) -> Result<Vec<ChangeEvent>, PollError> {
+        let runs = self.client.list_workflow_runs(repo).await?;
+        let mut alerts = Vec::new();
+
+        for run in runs {
+            if !run.is_completed() {
+                continue;
+            }
+            let history = self
+                .store
+                .recent_durations(&run.repo, &run.workflow, BASELINE_WINDOW)?;
+            if !self.store.record_run(&run)? {
+                continue; // already seen in an earlier cycle → already alerted
+            }
+
+            if run.is_failure() {
+                alerts.push(ChangeEvent::CiAlert(CiAlert {
+                    repo: run.repo.clone(),
+                    workflow: run.workflow.clone(),
+                    run_id: run.id,
+                    kind: CiAlertKind::Failure,
+                    reason: format!(
+                        "{} concluded {}",
+                        run.workflow,
+                        run.conclusion.as_deref().unwrap_or("failure")
+                    ),
+                }));
+            }
+
+            if let Some(flag) = flag_slow(&history, run.duration_secs, &self.slow_ci) {
+                alerts.push(ChangeEvent::CiAlert(CiAlert {
+                    repo: run.repo.clone(),
+                    workflow: run.workflow.clone(),
+                    run_id: run.id,
+                    kind: CiAlertKind::SlowCi,
+                    reason: format!("{} {}", run.workflow, flag.reason),
+                }));
+            }
+        }
+
+        Ok(alerts)
     }
 
     /// Drive the poll loop, streaming each [`ChangeEvent`] over `tx` until the consumer drops the
@@ -285,6 +346,7 @@ mod tests {
                 ChangeEvent::Removed(_) => removed += 1,
                 ChangeEvent::Enriched(_) => enriched += 1,
                 ChangeEvent::Classified(_) => classified += 1,
+                ChangeEvent::CiAlert(_) => {}
             }
         }
         (added, updated, removed, enriched, classified)

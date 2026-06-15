@@ -472,6 +472,58 @@ impl Store {
                 .map_err(|e| StoreError::Decode(e.to_string())),
         }
     }
+
+    /// Record a single workflow run, keyed by `(repo, run_id)`.
+    ///
+    /// Returns `true` when a new row was inserted and `false` when the run was already recorded
+    /// (the `(repo, run_id)` pair already existed). The insert is idempotent via
+    /// `ON CONFLICT … DO NOTHING`, so re-recording a known run is a no-op. `conclusion` is stored as
+    /// nullable TEXT (`None` for an in-progress run). Only non-secret run metadata is written — never
+    /// a token (ARD AD-6).
+    pub fn record_run(&self, run: &domain::WorkflowRun) -> Result<bool, StoreError> {
+        self.conn.execute(
+            "INSERT INTO ci_runs (repo, run_id, workflow, conclusion, duration_secs)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo, run_id) DO NOTHING",
+            params![
+                run.repo,
+                run.id as i64,
+                run.workflow,
+                run.conclusion,
+                run.duration_secs as i64,
+            ],
+        )?;
+        Ok(self.conn.changes() == 1)
+    }
+
+    /// Return the durations of the most recent completed runs for `(repo, workflow)`.
+    ///
+    /// Only runs with a non-null `conclusion` (i.e. finished runs) are considered; in-progress runs
+    /// are excluded. Results are ordered newest-first by `run_id` and capped at `limit`. A
+    /// never-recorded `(repo, workflow)` yields an empty `Vec`.
+    pub fn recent_durations(
+        &self,
+        repo: &str,
+        workflow: &str,
+        limit: usize,
+    ) -> Result<Vec<u64>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT duration_secs FROM ci_runs
+             WHERE repo = ?1 AND workflow = ?2 AND conclusion IS NOT NULL
+             ORDER BY run_id DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![repo, workflow, limit as i64], |row| {
+            let secs: i64 = row.get(0)?;
+            Ok(secs as u64)
+        })?;
+
+        let mut durations = Vec::new();
+        for duration in rows {
+            durations.push(duration?);
+        }
+        Ok(durations)
+    }
 }
 
 /// Map a [`domain::CommentKind`] to its stored text form.
@@ -999,7 +1051,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -1202,5 +1254,108 @@ mod tests {
             store.load_label_map("other/repo").expect("load"),
             Some(map2)
         );
+    }
+
+    fn sample_run(
+        repo: &str,
+        id: u64,
+        workflow: &str,
+        conclusion: Option<&str>,
+        duration_secs: u64,
+    ) -> domain::WorkflowRun {
+        domain::WorkflowRun {
+            id,
+            repo: repo.to_string(),
+            workflow: workflow.to_string(),
+            conclusion: conclusion.map(String::from),
+            duration_secs,
+        }
+    }
+
+    #[test]
+    fn migration_creates_ci_runs_table() {
+        let store = Store::open_in_memory().expect("open + migrate");
+
+        let found: Option<String> = store
+            .connection()
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ci_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("query sqlite_master");
+        assert_eq!(found.as_deref(), Some("ci_runs"));
+
+        let version: i64 = store
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version");
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn record_run_returns_true_first_then_false_for_duplicate() {
+        let store = Store::open_in_memory().expect("open store");
+
+        let run = sample_run("octocat/hello", 100, "CI", Some("success"), 42);
+        assert!(store.record_run(&run).expect("first record"));
+        // Same (repo, run_id) → no new row inserted.
+        assert!(!store.record_run(&run).expect("second record"));
+    }
+
+    #[test]
+    fn recent_durations_returns_completed_matching_runs_newest_first() {
+        let store = Store::open_in_memory().expect("open store");
+
+        // Completed runs for (repo, "CI") with increasing run_id.
+        store
+            .record_run(&sample_run("octocat/hello", 1, "CI", Some("success"), 10))
+            .expect("record");
+        store
+            .record_run(&sample_run("octocat/hello", 2, "CI", Some("failure"), 20))
+            .expect("record");
+        store
+            .record_run(&sample_run("octocat/hello", 3, "CI", Some("success"), 30))
+            .expect("record");
+        // A different workflow for the same repo — must be excluded.
+        store
+            .record_run(&sample_run(
+                "octocat/hello",
+                4,
+                "Deploy",
+                Some("success"),
+                99,
+            ))
+            .expect("record");
+        // A different repo, same workflow — must be excluded.
+        store
+            .record_run(&sample_run("other/repo", 5, "CI", Some("success"), 88))
+            .expect("record");
+        // An in-progress run (no conclusion) for the target — must be excluded.
+        store
+            .record_run(&sample_run("octocat/hello", 6, "CI", None, 77))
+            .expect("record");
+
+        // No limit pressure: only the three completed (repo, "CI") durations, newest-first.
+        let all = store
+            .recent_durations("octocat/hello", "CI", 10)
+            .expect("recent");
+        assert_eq!(all, vec![30, 20, 10]);
+
+        // limit caps the result, still newest-first.
+        let capped = store
+            .recent_durations("octocat/hello", "CI", 2)
+            .expect("recent capped");
+        assert_eq!(capped, vec![30, 20]);
+    }
+
+    #[test]
+    fn recent_durations_unknown_pair_is_empty() {
+        let store = Store::open_in_memory().expect("open store");
+        assert!(store
+            .recent_durations("never/recorded", "CI", 10)
+            .expect("recent")
+            .is_empty());
     }
 }

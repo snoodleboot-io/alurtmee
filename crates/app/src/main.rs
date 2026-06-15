@@ -18,6 +18,7 @@
 //! GitHub calls and keychain/SQLite effects and feeds results back into the model — it is covered
 //! by the headless window smoke test and the end-to-end acceptance test in `tests/`.
 
+mod demo;
 mod pr_list_model;
 mod settings_model;
 mod telemetry;
@@ -81,9 +82,19 @@ impl Alurtmee {
         });
         let base_url = std::env::var("ALURTMEE_GITHUB_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_GITHUB_BASE_URL.to_string());
+
+        // Manual UI review aid: pre-populate the dashboard with sample PRs + enrichment so the
+        // detail view can be eyeballed without a token. Never active in normal runs.
+        let mut pr_list = PrListModel::new();
+        if std::env::var_os("ALURTMEE_DEMO").is_some() {
+            for event in demo::demo_events() {
+                pr_list.apply(event);
+            }
+        }
+
         let app = Self {
             model: SettingsModel::new().with_selection(selection),
-            pr_list: PrListModel::new(),
+            pr_list,
             keychain: Keychain::new(),
             store,
             base_url,

@@ -89,6 +89,12 @@ async fn changed_pr_is_enriched_with_reviews_comments_and_test_verdict() {
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"success"}"#))
         .mount(&server)
         .await;
+    // Phase 4 also classifies a changed PR, which fetches the changed paths.
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/7/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
 
     let db_path = unique_db_path("detail");
     let client = GhClient::new(server.uri(), DUMMY_TOKEN).unwrap();

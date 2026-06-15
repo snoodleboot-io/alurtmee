@@ -27,6 +27,7 @@ async fn mount_enrichment_defaults(server: &MockServer) {
         r"/reviews$",
         r"/pulls/\d+/comments$",
         r"/issues/\d+/comments$",
+        r"/files$",
     ] {
         Mock::given(method("GET"))
             .and(path_regex(suffix))
@@ -46,11 +47,12 @@ async fn mount_enrichment_defaults(server: &MockServer) {
         .await;
 }
 
-/// Count the change-detection events (added/updated/removed), ignoring enrichment events.
+/// Count the change-detection events (added/updated/removed), ignoring derived
+/// enrichment/classification events.
 fn diff_event_count(events: &[ChangeEvent]) -> usize {
     events
         .iter()
-        .filter(|e| !matches!(e, ChangeEvent::Enriched(_)))
+        .filter(|e| !matches!(e, ChangeEvent::Enriched(_) | ChangeEvent::Classified(_)))
         .count()
 }
 
@@ -186,6 +188,9 @@ fn poller_store_seed() -> Vec<domain::PullRequest> {
             updated_at: "t1".to_string(),
             url: "https://github.com/o/r/pull/1".to_string(),
             head_sha: String::new(),
+            author_type: String::new(),
+            head_ref: String::new(),
+            labels: Vec::new(),
         },
         PullRequest {
             id: PrId::new("o/r", 2),
@@ -195,6 +200,9 @@ fn poller_store_seed() -> Vec<domain::PullRequest> {
             updated_at: "t1".to_string(),
             url: "https://github.com/o/r/pull/2".to_string(),
             head_sha: String::new(),
+            author_type: String::new(),
+            head_ref: String::new(),
+            labels: Vec::new(),
         },
     ]
 }

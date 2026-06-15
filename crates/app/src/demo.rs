@@ -5,9 +5,27 @@
 //! the product flow: nothing here runs unless `ALURTMEE_DEMO` is set.
 
 use domain::{
-    ChangeEvent, Comment, CommentKind, PrEnrichment, PrId, PullRequest, Review, TestState,
-    TestSummary,
+    AuthorKind, Category, CategoryKind, ChangeEvent, Classification, Comment, CommentKind,
+    PrEnrichment, PrId, PullRequest, Review, TestState, TestSummary,
 };
+
+/// Build a demo classification verdict.
+fn classification(
+    id: PrId,
+    author_kind: AuthorKind,
+    kind: CategoryKind,
+    signal: &str,
+) -> Classification {
+    Classification {
+        id,
+        author_kind,
+        category: Category {
+            kind,
+            confidence: 0.9,
+            signal: signal.to_string(),
+        },
+    }
+}
 
 /// The sequence of events a real poll cycle would emit for two illustrative PRs — one green, one
 /// failing — each followed by its enrichment.
@@ -20,6 +38,9 @@ pub fn demo_events() -> Vec<ChangeEvent> {
         updated_at: "2026-06-14T09:00:00Z".to_string(),
         url: "https://github.com/octocat/hello/pull/42".to_string(),
         head_sha: "aaa111".to_string(),
+        author_type: String::new(),
+        head_ref: String::new(),
+        labels: Vec::new(),
     };
     let green_enrichment = PrEnrichment::new(
         pr_green.id.clone(),
@@ -57,6 +78,9 @@ pub fn demo_events() -> Vec<ChangeEvent> {
         updated_at: "2026-06-14T10:30:00Z".to_string(),
         url: "https://github.com/octocat/hello/pull/43".to_string(),
         head_sha: "bbb222".to_string(),
+        author_type: String::new(),
+        head_ref: String::new(),
+        labels: Vec::new(),
     };
     let red_enrichment = PrEnrichment::new(
         pr_red.id.clone(),
@@ -79,10 +103,25 @@ pub fn demo_events() -> Vec<ChangeEvent> {
         },
     );
 
+    let green_id = pr_green.id.clone();
+    let red_id = pr_red.id.clone();
+
     vec![
         ChangeEvent::Added(pr_green),
         ChangeEvent::Enriched(green_enrichment),
+        ChangeEvent::Classified(classification(
+            green_id,
+            AuthorKind::Human,
+            CategoryKind::Feature,
+            "prefix:feature",
+        )),
         ChangeEvent::Added(pr_red),
         ChangeEvent::Enriched(red_enrichment),
+        ChangeEvent::Classified(classification(
+            red_id,
+            AuthorKind::Bot,
+            CategoryKind::Security,
+            "dependabot",
+        )),
     ]
 }

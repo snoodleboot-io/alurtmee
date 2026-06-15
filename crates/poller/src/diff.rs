@@ -50,6 +50,9 @@ mod tests {
             updated_at: updated_at.to_string(),
             url: format!("https://github.com/{repo}/pull/{number}"),
             head_sha: String::new(),
+            author_type: String::new(),
+            head_ref: String::new(),
+            labels: Vec::new(),
         }
     }
 

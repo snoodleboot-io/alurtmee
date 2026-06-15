@@ -24,4 +24,10 @@ pub struct PullRequest {
     pub url: String,
     /// SHA of the PR's head commit — the key for fetching check-runs/status during enrichment.
     pub head_sha: String,
+    /// Author account type from GitHub (`User`, `Bot`, `Organization`) — a human-vs-bot signal.
+    pub author_type: String,
+    /// Head branch name (`head.ref`) — feeds the branch-prefix classification signal.
+    pub head_ref: String,
+    /// Label names on the PR — feed the label classification signal.
+    pub labels: Vec<String>,
 }

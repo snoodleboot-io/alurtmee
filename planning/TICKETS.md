@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-9
+**Next free ID:** ALRT-10
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|
@@ -15,4 +15,5 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-5 | Phase 3 — Enrichment (reviews, comments, check-runs/status → PR detail; enrich only on change) | `feat/ALRT-5-phase-3-enrichment` | Merged |
 | ALRT-6 | Demo-seed UI mode (ALURTMEE_DEMO=1) — sample PRs + enrichment for manual UI review (no PAT) | `feat/ALRT-6-demo-seed-ui` | Merged |
 | ALRT-7 | Phase 4 — Classification (human/bot + layered feature/security; corrections; per-repo config) | `feat/ALRT-7-phase-4-classification` | Merged |
-| ALRT-8 | Phase 5 — CI/CD timing + alerts (Actions runs, p75/p90 baseline, slow-flag, Linux notifications) | `feat/ALRT-8-phase-5-ci-timing` | Done |
+| ALRT-8 | Phase 5 — CI/CD timing + alerts (Actions runs, p75/p90 baseline, slow-flag, Linux notifications) | `feat/ALRT-8-phase-5-ci-timing` | Merged |
+| ALRT-9 | Phase 6 — Filters + Polish (composable filter chips, focus/blur cadence, dark theming, empty/error states) | `feat/ALRT-9-phase-6-filters-polish` | Done |

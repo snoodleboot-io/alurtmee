@@ -15,6 +15,9 @@ use crate::poll_outcome::PollOutcome;
 /// How many recent completed runs per `(repo, workflow)` feed the slow-CI baseline.
 const BASELINE_WINDOW: usize = 20;
 
+/// How much to slow polling when the window is blurred: poll 4× less often (NFR2).
+const BLUR_SLOWDOWN: u32 = 4;
+
 /// The two-tier poller (ARD AD-3).
 ///
 /// **Why two tiers, not refetch-all (§3.6):** the cheap tier is a single conditional request per
@@ -226,7 +229,21 @@ impl Poller {
     /// jitter applied to avoid synchronized bursts. Cancellation-safe: dropping this future (e.g.
     /// an Iced subscription being torn down) aborts cleanly at the next await point, and a closed
     /// channel ends the loop without further work.
-    pub async fn run(mut self, repos: Vec<String>, tx: Sender<ChangeEvent>) {
+    ///
+    /// **Why focus adaptation (§3.6):** the biggest cheap lever on idle cost is *attention*. When
+    /// the window is focused the user is watching, so we poll at the base cadence for
+    /// responsiveness; when it's blurred they aren't, so we back off hard (see [`focus_adjusted`]).
+    /// This adapts to actual usage rather than a fixed interval, and it composes with — never
+    /// undercuts — the existing change-backoff and the server `X-Poll-Interval` floor: the focus
+    /// adjustment only ever *lengthens* the wait. The current focus is read fresh each cycle
+    /// (`*focus.borrow()`), so a focus change takes effect on the next cycle; the borrow is never
+    /// held across an await.
+    pub async fn run(
+        mut self,
+        repos: Vec<String>,
+        tx: Sender<ChangeEvent>,
+        focus: tokio::sync::watch::Receiver<bool>,
+    ) {
         let mut consecutive_unchanged: u32 = 0;
 
         loop {
@@ -262,13 +279,30 @@ impl Poller {
                 consecutive_unchanged.saturating_add(1)
             };
 
-            let interval = apply_jitter(
-                self.cadence
-                    .interval(consecutive_unchanged, outcome.poll_interval),
-                jitter_fraction(),
-            );
+            // Base interval from the cadence policy (change-backoff + server floor), then
+            // lengthen it when the window is blurred. Read focus without holding the borrow
+            // across the await below.
+            let base = self
+                .cadence
+                .interval(consecutive_unchanged, outcome.poll_interval);
+            let focused = *focus.borrow();
+            let interval = apply_jitter(focus_adjusted(base, focused), jitter_fraction());
             tokio::time::sleep(interval).await;
         }
+    }
+}
+
+/// Lengthen the poll interval when the window is blurred (NFR2).
+///
+/// Focused → the user is watching, so poll at the given `interval`. Blurred → back off by
+/// [`BLUR_SLOWDOWN`]. This only ever *lengthens* the wait, so it can never poll faster than the
+/// `X-Poll-Interval` floor already baked into `interval`; the multiply saturates rather than
+/// overflowing.
+fn focus_adjusted(interval: Duration, focused: bool) -> Duration {
+    if focused {
+        interval
+    } else {
+        interval.saturating_mul(BLUR_SLOWDOWN)
     }
 }
 
@@ -537,7 +571,8 @@ mod tests {
 
         let poller = poller_for(&server);
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-        let handle = tokio::spawn(poller.run(vec!["o/r".to_string()], tx));
+        let (_focus_tx, focus_rx) = tokio::sync::watch::channel(true);
+        let handle = tokio::spawn(poller.run(vec!["o/r".to_string()], tx, focus_rx));
 
         // First cycle emits the two Added events.
         let first = rx.recv().await.unwrap();
@@ -564,5 +599,65 @@ mod tests {
         );
         let mid = apply_jitter(base, 0.5);
         assert!(mid >= base && mid <= Duration::from_secs(125));
+    }
+
+    #[test]
+    fn focus_adjusted_passes_through_when_focused() {
+        let base = Duration::from_secs(30);
+        assert_eq!(
+            focus_adjusted(base, true),
+            base,
+            "focused leaves the interval unchanged"
+        );
+    }
+
+    #[test]
+    fn focus_adjusted_slows_down_when_blurred() {
+        let base = Duration::from_secs(30);
+        assert_eq!(
+            focus_adjusted(base, false),
+            base * BLUR_SLOWDOWN,
+            "blurred multiplies the interval by BLUR_SLOWDOWN"
+        );
+        // The adjustment only ever lengthens the wait.
+        assert!(focus_adjusted(base, false) >= base);
+    }
+
+    #[test]
+    fn focus_adjusted_saturates_on_large_input() {
+        // A huge-but-valid Duration whose ×BLUR_SLOWDOWN would overflow must saturate, not panic.
+        let huge = Duration::from_secs(u64::MAX / 2);
+        let adjusted = focus_adjusted(huge, false);
+        assert!(adjusted >= huge, "saturating multiply never shrinks");
+    }
+
+    #[tokio::test]
+    async fn run_terminates_promptly_even_when_blurred() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"v1\"")
+                    .set_body_string(pulls_body()),
+            )
+            .mount(&server)
+            .await;
+        mount_enrichment_defaults(&server).await;
+
+        let poller = poller_for(&server);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        // Blurred (false): proves reading focus each cycle doesn't deadlock the loop.
+        let (_focus_tx, focus_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(poller.run(vec!["o/r".to_string()], tx, focus_rx));
+
+        let first = rx.recv().await.unwrap();
+        assert!(matches!(first, ChangeEvent::Added(_)));
+
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("run loop should terminate after receiver drop even when blurred")
+            .expect("task should not panic");
     }
 }

@@ -49,6 +49,7 @@ mod tests {
             draft: false,
             updated_at: updated_at.to_string(),
             url: format!("https://github.com/{repo}/pull/{number}"),
+            head_sha: String::new(),
         }
     }
 

@@ -5,7 +5,10 @@ use serde::de::DeserializeOwned;
 use crate::error::GhError;
 use crate::open_prs_result::OpenPrsResult;
 use crate::pr_outcome::PrOutcome;
-use crate::wire::{WireOrg, WirePullRequest, WireRepo, WireUser};
+use crate::wire::{
+    WireCheckRunsResponse, WireCombinedStatus, WireComment, WireOrg, WirePullRequest, WireRepo,
+    WireReview, WireUser,
+};
 
 const USER_AGENT: &str = "alurtmee";
 const ACCEPT: &str = "application/vnd.github+json";
@@ -141,6 +144,95 @@ impl GhClient {
             rate_limit,
             poll_interval,
         })
+    }
+
+    /// List the submitted reviews on a pull request
+    /// (`GET /repos/{repo}/pulls/{number}/reviews?per_page=100`, paginated).
+    ///
+    /// Enrichment is fetched only for *changed* PRs, so this is a plain (non-conditional) GET —
+    /// it does not involve the ETag/304 path. `repo` is an `owner/name` slug.
+    pub async fn list_reviews(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<domain::Review>, GhError> {
+        let url = format!(
+            "{}/repos/{}/pulls/{}/reviews?per_page=100",
+            self.base_url, repo, number
+        );
+        let wires: Vec<WireReview> = self.get_paginated(url).await?;
+        Ok(wires.into_iter().map(Into::into).collect())
+    }
+
+    /// List a pull request's comments, merging both GitHub streams into one attributed thread.
+    ///
+    /// GitHub splits PR comments across two endpoints: top-level *issue* comments
+    /// (`GET /repos/{repo}/issues/{number}/comments`) and inline *review* comments on the diff
+    /// (`GET /repos/{repo}/pulls/{number}/comments`). Both are fetched (paginated) and merged with
+    /// the originating [`domain::CommentKind`] attributed: issue comments first (stable order),
+    /// then review comments. Each comment's author is preserved (Phase 4 classification keys on it).
+    pub async fn list_comments(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<domain::Comment>, GhError> {
+        let issue_url = format!(
+            "{}/repos/{}/issues/{}/comments?per_page=100",
+            self.base_url, repo, number
+        );
+        let review_url = format!(
+            "{}/repos/{}/pulls/{}/comments?per_page=100",
+            self.base_url, repo, number
+        );
+
+        let issue_wires: Vec<WireComment> = self.get_paginated(issue_url).await?;
+        let review_wires: Vec<WireComment> = self.get_paginated(review_url).await?;
+
+        let mut comments: Vec<domain::Comment> = issue_wires
+            .into_iter()
+            .map(|w| w.into_comment(domain::CommentKind::Issue))
+            .collect();
+        comments.extend(
+            review_wires
+                .into_iter()
+                .map(|w| w.into_comment(domain::CommentKind::Review)),
+        );
+        Ok(comments)
+    }
+
+    /// Reconcile a PR's CI verdict for its head commit into a [`domain::TestSummary`].
+    ///
+    /// Combines two sources for `head_sha`: the Checks API
+    /// (`GET /repos/{repo}/commits/{head_sha}/check-runs`, an object `{ total_count, check_runs }`,
+    /// not a bare array) and the legacy combined commit status
+    /// (`GET /repos/{repo}/commits/{head_sha}/status`, `{ state }`). Counts come from the
+    /// check-runs; the legacy status can only *raise* severity. The two GETs are awaited
+    /// sequentially to avoid pulling `tokio` into the production dependency set.
+    pub async fn test_summary(
+        &self,
+        repo: &str,
+        head_sha: &str,
+    ) -> Result<domain::TestSummary, GhError> {
+        // TODO(phase-later): paginate check-runs for PRs with >100 checks.
+        let check_runs_url = format!(
+            "{}/repos/{}/commits/{}/check-runs",
+            self.base_url, repo, head_sha
+        );
+        let status_url = format!(
+            "{}/repos/{}/commits/{}/status",
+            self.base_url, repo, head_sha
+        );
+
+        let runs_resp: WireCheckRunsResponse = self.get_json(&check_runs_url).await?;
+        let combined: WireCombinedStatus = self.get_json(&status_url).await?;
+
+        let check_runs: Vec<domain::CheckRun> =
+            runs_resp.check_runs.into_iter().map(Into::into).collect();
+
+        Ok(domain::TestSummary::reconcile(
+            &check_runs,
+            Some(&combined.state),
+        ))
     }
 
     /// Issue a conditional GET, applying the standard headers plus `If-None-Match` when `etag` is
@@ -738,5 +830,164 @@ mod tests {
         // The non-conditional path treats 304 as an unexpected status.
         let plain = client.send(&url).await;
         assert!(matches!(plain, Err(GhError::Http { status: 304 })));
+    }
+
+    // ---- enrichment: list_reviews ----
+
+    #[tokio::test]
+    async fn list_reviews_parses_two_with_author_and_state() {
+        let server = MockServer::start().await;
+        let body = r#"[
+            {"user":{"login":"alice"},"state":"APPROVED","submitted_at":"2026-06-14T09:00:00Z"},
+            {"user":{"login":"bob"},"state":"CHANGES_REQUESTED","submitted_at":"2026-06-14T10:00:00Z"}
+        ]"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/reviews"))
+            .and(query_param("per_page", "100"))
+            .and(header("authorization", "Bearer dummy-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let reviews = client.list_reviews("octocat/hello", 7).await.unwrap();
+        assert_eq!(reviews.len(), 2);
+        assert_eq!(reviews[0].author, "alice");
+        assert_eq!(reviews[0].state, "APPROVED");
+        assert_eq!(reviews[1].author, "bob");
+        assert_eq!(reviews[1].state, "CHANGES_REQUESTED");
+    }
+
+    #[tokio::test]
+    async fn list_reviews_empty_array_is_empty_vec() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/reviews"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let reviews = client.list_reviews("octocat/hello", 7).await.unwrap();
+        assert!(reviews.is_empty());
+    }
+
+    // ---- enrichment: list_comments ----
+
+    #[tokio::test]
+    async fn list_comments_merges_issue_then_review_with_kind_attribution() {
+        let server = MockServer::start().await;
+        let issue_body = r#"[
+            {"user":{"login":"alice"},"body":"first issue comment","created_at":"2026-06-14T09:00:00Z"},
+            {"user":{"login":"bob"},"body":"second issue comment","created_at":"2026-06-14T09:30:00Z"}
+        ]"#;
+        let review_body = r#"[
+            {"user":{"login":"carol"},"body":"inline nit","created_at":"2026-06-14T10:00:00Z"}
+        ]"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/issues/7/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(issue_body))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/pulls/7/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(review_body))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let comments = client.list_comments("octocat/hello", 7).await.unwrap();
+        assert_eq!(comments.len(), 3);
+        // Issue comments first, in order.
+        assert_eq!(comments[0].kind, domain::CommentKind::Issue);
+        assert_eq!(comments[0].author, "alice");
+        assert_eq!(comments[1].kind, domain::CommentKind::Issue);
+        assert_eq!(comments[1].author, "bob");
+        // Review comment last.
+        assert_eq!(comments[2].kind, domain::CommentKind::Review);
+        assert_eq!(comments[2].author, "carol");
+        assert_eq!(comments[2].body, "inline nit");
+    }
+
+    // ---- enrichment: test_summary ----
+
+    #[tokio::test]
+    async fn test_summary_failing_when_a_check_fails() {
+        let server = MockServer::start().await;
+        let check_runs = r#"{
+            "total_count": 2,
+            "check_runs": [
+                {"name":"build","status":"completed","conclusion":"success"},
+                {"name":"test","status":"completed","conclusion":"failure"}
+            ]
+        }"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/deadbeef/check-runs"))
+            .and(header("authorization", "Bearer dummy-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(check_runs))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/deadbeef/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"failure"}"#))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let summary = client
+            .test_summary("octocat/hello", "deadbeef")
+            .await
+            .unwrap();
+        assert_eq!(summary.state, domain::TestState::Failing);
+        assert!(summary.failed >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_summary_passing_when_all_success() {
+        let server = MockServer::start().await;
+        let check_runs = r#"{
+            "total_count": 2,
+            "check_runs": [
+                {"name":"build","status":"completed","conclusion":"success"},
+                {"name":"test","status":"completed","conclusion":"success"}
+            ]
+        }"#;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/cafe/check-runs"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(check_runs))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/cafe/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"success"}"#))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let summary = client.test_summary("octocat/hello", "cafe").await.unwrap();
+        assert_eq!(summary.state, domain::TestState::Passing);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_summary_pending_when_no_checks_and_status_pending() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/beef/check-runs"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"total_count":0,"check_runs":[]}"#),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/octocat/hello/commits/beef/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"pending"}"#))
+            .mount(&server)
+            .await;
+
+        let client = GhClient::new(server.uri(), "dummy-token").unwrap();
+        let summary = client.test_summary("octocat/hello", "beef").await.unwrap();
+        assert_eq!(summary.state, domain::TestState::Pending);
     }
 }

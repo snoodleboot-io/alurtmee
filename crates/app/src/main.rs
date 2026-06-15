@@ -26,7 +26,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use directories::ProjectDirs;
-use domain::{AuthState, ChangeEvent, Org, PollCadence, Repo, User};
+use domain::{AuthState, ChangeEvent, CommentKind, Org, PollCadence, Repo, TestState, User};
 use gh_client::GhClient;
 use iced::widget::{button, checkbox, column, container, scrollable, text, text_input};
 use iced::{Element, Subscription, Task};
@@ -283,12 +283,51 @@ impl Alurtmee {
             .iter()
             .map(|pr| {
                 let draft = if pr.draft { "  · draft" } else { "" };
-                text(format!(
+                let mut row = column![text(format!(
                     "{}#{}  {}  (@{}){}",
                     pr.id.repo, pr.id.number, pr.title, pr.author, draft
                 ))
-                .size(14)
-                .into()
+                .size(14)]
+                .spacing(2);
+
+                // Detail: test badge, reviews, and merged comment threads (once enriched).
+                if let Some(enrichment) = self.pr_list.enrichment(&pr.id) {
+                    let badge = match enrichment.tests.state {
+                        TestState::Passing => "tests: passing",
+                        TestState::Failing => "tests: failing",
+                        TestState::Pending => "tests: pending",
+                        TestState::None => "tests: none",
+                    };
+                    row = row.push(
+                        text(format!(
+                            "    {badge} (passed {}, failed {}, pending {}) · {} reviews · {} comments",
+                            enrichment.tests.passed,
+                            enrichment.tests.failed,
+                            enrichment.tests.pending,
+                            enrichment.reviews.len(),
+                            enrichment.comments.len(),
+                        ))
+                        .size(12),
+                    );
+                    for review in &enrichment.reviews {
+                        row = row.push(
+                            text(format!("      review @{}: {}", review.author, review.state))
+                                .size(12),
+                        );
+                    }
+                    for comment in &enrichment.comments {
+                        let kind = match comment.kind {
+                            CommentKind::Issue => "issue",
+                            CommentKind::Review => "review",
+                        };
+                        let preview: String = comment.body.chars().take(80).collect();
+                        row = row.push(
+                            text(format!("      {kind} @{}: {preview}", comment.author)).size(12),
+                        );
+                    }
+                }
+
+                row.into()
             })
             .collect();
 

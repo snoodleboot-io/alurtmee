@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use super::wire_head::WireHead;
 use super::wire_pull_request_user::WirePullRequestUser;
 
 /// GitHub's `GET /repos/{owner}/{repo}/pulls` list item (subset). Extra fields are ignored.
@@ -16,6 +17,10 @@ pub(crate) struct WirePullRequest {
     pub draft: bool,
     pub updated_at: String,
     pub html_url: String,
+    /// Tolerated as absent (defaults to an empty sha) so change-detection-only payloads that omit
+    /// `head` still parse; enrichment payloads carry it.
+    #[serde(default)]
+    pub head: WireHead,
 }
 
 impl WirePullRequest {
@@ -28,6 +33,7 @@ impl WirePullRequest {
             draft: self.draft,
             updated_at: self.updated_at,
             url: self.html_url,
+            head_sha: self.head.sha,
         }
     }
 }

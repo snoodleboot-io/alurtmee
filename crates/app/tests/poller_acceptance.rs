@@ -8,17 +8,50 @@
 
 use std::time::Duration;
 
-use domain::PollCadence;
+use domain::{ChangeEvent, PollCadence};
 use gh_client::GhClient;
 use poller::Poller;
 use store::Store;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const DUMMY_TOKEN: &str = "ghp_dummy_token_not_a_real_pat";
 
 fn cadence() -> PollCadence {
     PollCadence::new(Duration::from_millis(20), Duration::from_millis(100))
+}
+
+/// Mount empty/default responses for every enrichment endpoint so changed PRs enrich cleanly.
+async fn mount_enrichment_defaults(server: &MockServer) {
+    for suffix in [
+        r"/reviews$",
+        r"/pulls/\d+/comments$",
+        r"/issues/\d+/comments$",
+    ] {
+        Mock::given(method("GET"))
+            .and(path_regex(suffix))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path_regex(r"/check-runs$"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"check_runs":[]}"#))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"/status$"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"state":"success"}"#))
+        .mount(server)
+        .await;
+}
+
+/// Count the change-detection events (added/updated/removed), ignoring enrichment events.
+fn diff_event_count(events: &[ChangeEvent]) -> usize {
+    events
+        .iter()
+        .filter(|e| !matches!(e, ChangeEvent::Enriched(_)))
+        .count()
 }
 
 fn body_two_prs() -> &'static str {
@@ -61,6 +94,7 @@ async fn prs_appear_then_304_then_survive_restart() {
         .with_priority(5)
         .mount(&server)
         .await;
+    mount_enrichment_defaults(&server).await;
 
     let db_path = unique_db_path("restart");
     let repos = vec!["o/r".to_string()];
@@ -73,7 +107,7 @@ async fn prs_appear_then_304_then_survive_restart() {
 
         let first = poller.poll_once(&repos).await.unwrap();
         assert!(first.changed);
-        assert_eq!(first.events.len(), 2, "two PRs appear");
+        assert_eq!(diff_event_count(&first.events), 2, "two PRs appear");
 
         // 2. Immediate re-poll sends If-None-Match → 304 → no change.
         let second = poller.poll_once(&repos).await.unwrap();
@@ -118,6 +152,7 @@ async fn changed_body_refreshes_the_list() {
         )
         .mount(&server)
         .await;
+    mount_enrichment_defaults(&server).await;
 
     let db_path = unique_db_path("refresh");
     let repos = vec!["o/r".to_string()];
@@ -133,8 +168,8 @@ async fn changed_body_refreshes_the_list() {
 
     let outcome = poller.poll_once(&repos).await.unwrap();
     assert!(outcome.changed);
-    // #1 updated, #3 added, #2 removed.
-    assert_eq!(outcome.events.len(), 3);
+    // #1 updated, #3 added, #2 removed (enrichment events excluded from this count).
+    assert_eq!(diff_event_count(&outcome.events), 3);
 
     let _ = std::fs::remove_file(&db_path);
 }
@@ -150,6 +185,7 @@ fn poller_store_seed() -> Vec<domain::PullRequest> {
             draft: false,
             updated_at: "t1".to_string(),
             url: "https://github.com/o/r/pull/1".to_string(),
+            head_sha: String::new(),
         },
         PullRequest {
             id: PrId::new("o/r", 2),
@@ -158,6 +194,7 @@ fn poller_store_seed() -> Vec<domain::PullRequest> {
             draft: true,
             updated_at: "t1".to_string(),
             url: "https://github.com/o/r/pull/2".to_string(),
+            head_sha: String::new(),
         },
     ]
 }

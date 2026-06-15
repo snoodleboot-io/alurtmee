@@ -22,4 +22,6 @@ pub struct PullRequest {
     pub updated_at: String,
     /// Web URL for opening the PR in a browser.
     pub url: String,
+    /// SHA of the PR's head commit — the key for fetching check-runs/status during enrichment.
+    pub head_sha: String,
 }

@@ -1,13 +1,18 @@
-use domain::{ChangeEvent, PullRequest};
+use std::collections::BTreeMap;
 
-/// The UI's view of currently-open pull requests, maintained incrementally from [`ChangeEvent`]s.
+use domain::{ChangeEvent, PrEnrichment, PrId, PullRequest};
+
+/// The UI's view of currently-open pull requests plus their enrichment, maintained incrementally
+/// from [`ChangeEvent`]s.
 ///
 /// Pure and synchronous so it can be unit-tested without the poller or Iced. The list is kept
 /// sorted by [`domain::PrId`] (`repo`, then `number`) so the rendered order is stable across
-/// updates and doesn't jump around as events arrive.
+/// updates and doesn't jump around as events arrive. Enrichment (reviews/comments/tests) is held
+/// in a side map keyed by id and rendered in the PR detail.
 #[derive(Debug, Clone, Default)]
 pub struct PrListModel {
     prs: Vec<PullRequest>,
+    enrichments: BTreeMap<PrId, PrEnrichment>,
 }
 
 impl PrListModel {
@@ -21,6 +26,11 @@ impl PrListModel {
         &self.prs
     }
 
+    /// The enrichment for a PR, if it has been fetched yet.
+    pub fn enrichment(&self, id: &PrId) -> Option<&PrEnrichment> {
+        self.enrichments.get(id)
+    }
+
     /// Number of open pull requests currently shown.
     pub fn len(&self) -> usize {
         self.prs.len()
@@ -31,9 +41,9 @@ impl PrListModel {
         self.prs.is_empty()
     }
 
-    /// Apply one change event. `Added`/`Updated` upsert by id (so a duplicate `Added` or an
-    /// `Updated` for an unseen PR both resolve to "present with the latest data"); `Removed` drops
-    /// the PR. The list stays sorted by id.
+    /// Apply one change event. `Added`/`Updated` upsert the PR by id; `Removed` drops the PR and
+    /// its enrichment; `Enriched` records the enrichment payload for its PR. The list stays sorted
+    /// by id.
     pub fn apply(&mut self, event: ChangeEvent) {
         match event {
             ChangeEvent::Added(pr) | ChangeEvent::Updated(pr) => {
@@ -42,7 +52,13 @@ impl PrListModel {
                     None => self.prs.push(pr),
                 }
             }
-            ChangeEvent::Removed(id) => self.prs.retain(|pr| pr.id != id),
+            ChangeEvent::Removed(id) => {
+                self.prs.retain(|pr| pr.id != id);
+                self.enrichments.remove(&id);
+            }
+            ChangeEvent::Enriched(enrichment) => {
+                self.enrichments.insert(enrichment.id.clone(), enrichment);
+            }
         }
         self.prs.sort_by(|a, b| a.id.cmp(&b.id));
     }
@@ -61,6 +77,7 @@ mod tests {
             draft: false,
             updated_at: updated_at.to_string(),
             url: format!("https://github.com/{repo}/pull/{number}"),
+            head_sha: String::new(),
         }
     }
 

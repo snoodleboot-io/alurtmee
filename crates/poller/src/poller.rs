@@ -9,8 +9,10 @@ use store::{EtagRecord, Store};
 use tokio::sync::mpsc::Sender;
 
 use crate::diff::diff_pull_requests;
+use crate::gh_api::GhApi;
 use crate::poll_error::PollError;
 use crate::poll_outcome::PollOutcome;
+use crate::poll_store::PollStore;
 
 /// How many recent completed runs per `(repo, workflow)` feed the slow-CI baseline.
 const BASELINE_WINDOW: usize = 20;
@@ -26,32 +28,33 @@ const BLUR_SLOWDOWN: u32 = 4;
 /// every PR's enrichment each cycle would burn rate limit and CPU on PRs that didn't move — exactly
 /// what AD-3 avoids. So enrichment is gated behind change-detection here.
 ///
-/// Owns its own [`GhClient`] and [`Store`] connection so it can run on a background task without
-/// sharing mutable state with the UI; it communicates results purely as [`ChangeEvent`]s over a
+/// Generic over its GitHub-access port [`GhApi`] and persistence port [`PollStore`] (DIP) so the
+/// poll loop can be unit-tested against fakes; production uses the concrete [`GhClient`]/[`Store`],
+/// which are the default type parameters. It communicates results purely as [`ChangeEvent`]s over a
 /// channel. One [`Self::poll_once`] is the unit of behaviour (conditionally fetch each selected
 /// repo, diff against the cache, enrich the changed PRs, persist), which is what the acceptance
 /// tests drive; [`Self::run`] is the thin scheduling shell around it.
-pub struct Poller {
-    client: GhClient,
-    store: Store,
+pub struct Poller<C = GhClient, S = Store> {
+    client: C,
+    store: S,
     cadence: PollCadence,
     slow_ci: SlowCiConfig,
 }
 
-impl Poller {
+/// The etag cache key for a repository's open-PR listing.
+fn endpoint_key(repo: &str) -> String {
+    format!("pulls:{repo}")
+}
+
+impl<C: GhApi + Send, S: PollStore + Send> Poller<C, S> {
     /// Construct a poller from an authenticated client, an open store, and a cadence policy.
-    pub fn new(client: GhClient, store: Store, cadence: PollCadence) -> Self {
+    pub fn new(client: C, store: S, cadence: PollCadence) -> Self {
         Self {
             client,
             store,
             cadence,
             slow_ci: SlowCiConfig::default(),
         }
-    }
-
-    /// The etag cache key for a repository's open-PR listing.
-    fn endpoint_key(repo: &str) -> String {
-        format!("pulls:{repo}")
     }
 
     /// Run a single poll cycle across `repos`: for each, send a conditional request keyed on the
@@ -61,7 +64,7 @@ impl Poller {
         let mut outcome = PollOutcome::default();
 
         for repo in repos {
-            let endpoint = Self::endpoint_key(repo);
+            let endpoint = endpoint_key(repo);
             let prior_etag = self.store.get_etag(&endpoint)?.and_then(|r| r.etag);
 
             let result = self
@@ -448,7 +451,7 @@ mod tests {
         poller
             .store
             .set_etag(
-                &Poller::endpoint_key("o/r"),
+                &endpoint_key("o/r"),
                 &EtagRecord {
                     etag: Some("\"v1\"".to_string()),
                     last_modified: None,

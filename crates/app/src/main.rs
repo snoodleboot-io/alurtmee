@@ -82,7 +82,22 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color {
     }
 }
 
-const SKINS: [Skin; 5] = [
+const SKINS: [Skin; 6] = [
+    Skin {
+        // Brand theme — drawn from the Alurtmee mascot: cosmic black, violet glow, cyan spark.
+        name: "Nebula",
+        bg: rgb(5, 3, 9),
+        surface: rgb(14, 10, 24),
+        border: rgb(40, 27, 64),
+        text: rgb(240, 236, 248),
+        muted: rgb(150, 137, 174),
+        accent: rgb(169, 87, 255),
+        accent_text: rgb(22, 8, 42),
+        gold: rgb(240, 197, 96),
+        green: rgb(95, 217, 154),
+        red: rgb(255, 93, 108),
+        slate: rgb(150, 137, 174),
+    },
     Skin {
         name: "Aurora",
         bg: rgb(8, 11, 11),
@@ -225,7 +240,7 @@ impl Alurtmee {
             .ok()
             .flatten()
             .and_then(|name| SKINS.iter().position(|s| s.name == name))
-            .unwrap_or(3); // Voltage
+            .unwrap_or(0); // Nebula (brand theme)
 
         let mut pr_list = PrListModel::new();
         if std::env::var_os("ALURTMEE_DEMO").is_some() {

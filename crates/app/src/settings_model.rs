@@ -123,17 +123,31 @@ impl SettingsModel {
         out
     }
 
-    /// Assign each *watched* repo to the single token that should poll it — the first token (in
-    /// order) that can see it. Returns `(label, repo_full_names)` groups, so the caller spawns one
-    /// poller per token over a disjoint repo set and a repo's PRs are never fetched twice.
+    /// Assign each *watched* repo to the single token that should poll it. Returns
+    /// `(label, repo_full_names)` groups, so the caller spawns one poller per token over a disjoint
+    /// repo set and a repo's PRs are never fetched twice.
+    ///
+    /// **Ownership rule — org access trumps personal.** A token whose own account owns the repo
+    /// (`login == repo owner`) holds it *personally*; any other token reaches it through an
+    /// organization / collaborator relationship. When several tokens can see a repo, an org token
+    /// wins over a personal one (the org token is the authoritative, fuller-access view); ties break
+    /// on configured order.
     pub fn poll_assignments(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for full_name in self.selection.iter() {
-            if let Some(pat) = self
+            let owner = full_name.split('/').next().unwrap_or("");
+            let candidates: Vec<&PatEntry> = self
                 .pats
                 .iter()
-                .find(|p| p.repos.iter().any(|r| r.full_name == *full_name))
-            {
+                .filter(|p| p.repos.iter().any(|r| r.full_name == *full_name))
+                .collect();
+            // Prefer the first token that accesses the repo via an org/collaborator relationship
+            // (its login is not the repo owner); fall back to the first token that can see it.
+            let chosen = candidates
+                .iter()
+                .find(|p| p.login.as_deref() != Some(owner))
+                .or_else(|| candidates.first());
+            if let Some(pat) = chosen {
                 groups
                     .entry(pat.label.clone())
                     .or_default()
@@ -385,9 +399,34 @@ mod tests {
 
         let assignments: BTreeMap<String, Vec<String>> =
             model.poll_assignments().into_iter().collect();
-        // org/api is shared but assigned to "a" only (first token wins) — never double-polled.
+        // org/api is shared; both tokens reach it via org access (neither login is "org"), so the
+        // tie breaks on order → "a". It is assigned once, never double-polled.
         assert_eq!(assignments.get("a"), Some(&vec!["org/api".to_string()]));
         assert_eq!(assignments.get("b"), Some(&vec!["me/blog".to_string()]));
+    }
+
+    #[test]
+    fn org_access_trumps_personal_ownership() {
+        let mut model = SettingsModel::new();
+        // The "personal" token is first in order and personally owns john/lib (login == owner).
+        model.pat_validated(
+            "personal".to_string(),
+            user("john"),
+            vec![repo("john", "lib")],
+        );
+        // The "work" token reaches john/lib via org/collaborator access (login != owner).
+        model.pat_validated(
+            "work".to_string(),
+            user("work-bot"),
+            vec![repo("john", "lib")],
+        );
+        model.toggle_repo("john/lib");
+
+        let assignments: BTreeMap<String, Vec<String>> =
+            model.poll_assignments().into_iter().collect();
+        // Despite "personal" being first AND owning it, the org-access token wins.
+        assert_eq!(assignments.get("work"), Some(&vec!["john/lib".to_string()]));
+        assert_eq!(assignments.get("personal"), None);
     }
 
     #[test]

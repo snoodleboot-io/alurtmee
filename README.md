@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Alurtmee" width="140">
+  <img src="assets/logo.png" alt="Alurtmee" width="240">
 </p>
 
 <h1 align="center">Alurtmee</h1>
@@ -68,7 +68,7 @@ cargo run -p app
 - **Filter chips** at the top of the list narrow it by source and kind.
 - **CI alerts** appear in a strip across the top, and — unless you switch them off with the
   **Notifications** toggle — as desktop notifications.
-- **Theme picker** (top bar) switches between the five looks; your choice is remembered.
+- **Theme picker** lives in **⚙ Settings** — switch between the six looks; your choice is remembered.
 - **Wrong tag?** On a PR's detail, click **→ feature** or **→ security** to correct its category.
   The correction persists and is reused next time.
 

@@ -28,7 +28,8 @@
       "Bash(echo \"EXIT_GREP=$?\")",
       "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 ALURTMEE_DEMO=1 RUST_LOG=warn ./target/debug/alurtmee)",
       "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 xdg-open /tmp/alurtmee-palettes.html)",
-      "Bash(echo \"COMMIT=$?\")"
+      "Bash(echo \"COMMIT=$?\")",
+      "Bash(awk '1; /\\\\| ALRT-10 \\\\|/ {print \"| ALRT-11 | Add project README.md | `feat/ALRT-11-readme` | In Progress |\"}' planning/TICKETS.md)"
     ]
   }
 }

@@ -66,6 +66,9 @@ struct Skin {
     text: Color,
     muted: Color,
     accent: Color,
+    /// Second neon — the logo's other glow (cyan against violet, etc.). Decorative
+    /// identity only, never semantic. Drives the neon selection edge and accents.
+    accent2: Color,
     accent_text: Color,
     gold: Color,
     green: Color,
@@ -93,6 +96,7 @@ const SKINS: [Skin; 6] = [
         text: rgb(244, 238, 252),
         muted: rgb(159, 140, 192),
         accent: rgb(168, 56, 255),
+        accent2: rgb(33, 230, 255),
         accent_text: rgb(18, 4, 38),
         gold: rgb(242, 199, 98),
         green: rgb(95, 222, 158),
@@ -107,6 +111,7 @@ const SKINS: [Skin; 6] = [
         text: rgb(234, 243, 239),
         muted: rgb(134, 163, 155),
         accent: rgb(47, 224, 196),
+        accent2: rgb(90, 208, 255),
         accent_text: rgb(4, 32, 25),
         gold: rgb(243, 207, 115),
         green: rgb(95, 217, 154),
@@ -121,6 +126,7 @@ const SKINS: [Skin; 6] = [
         text: rgb(241, 236, 247),
         muted: rgb(162, 148, 180),
         accent: rgb(207, 149, 255),
+        accent2: rgb(255, 121, 217),
         accent_text: rgb(27, 15, 41),
         gold: rgb(240, 198, 116),
         green: rgb(122, 217, 154),
@@ -135,6 +141,7 @@ const SKINS: [Skin; 6] = [
         text: rgb(246, 238, 247),
         muted: rgb(169, 143, 176),
         accent: rgb(255, 69, 224),
+        accent2: rgb(42, 212, 255),
         accent_text: rgb(33, 4, 28),
         gold: rgb(243, 207, 106),
         green: rgb(86, 224, 160),
@@ -149,6 +156,7 @@ const SKINS: [Skin; 6] = [
         text: rgb(238, 244, 231),
         muted: rgb(139, 151, 125),
         accent: rgb(182, 255, 58),
+        accent2: rgb(46, 230, 192),
         accent_text: rgb(22, 33, 10),
         gold: rgb(240, 197, 96),
         green: rgb(82, 217, 138),
@@ -156,18 +164,21 @@ const SKINS: [Skin; 6] = [
         slate: rgb(139, 151, 125),
     },
     Skin {
+        // Logo theme #2 — the orb's other half: pure black-blue void, electric-cyan
+        // primary and electric-violet secondary (#b14dff). Maximum neon, both glows present.
         name: "Ionix",
-        bg: rgb(6, 10, 14),
-        surface: rgb(14, 23, 34),
-        border: rgb(29, 48, 69),
+        bg: rgb(3, 5, 11),
+        surface: rgb(11, 16, 30),
+        border: rgb(43, 38, 92),
         text: rgb(233, 242, 251),
-        muted: rgb(128, 149, 173),
-        accent: rgb(33, 230, 255),
-        accent_text: rgb(3, 33, 42),
+        muted: rgb(140, 150, 190),
+        accent: rgb(40, 236, 255),
+        accent2: rgb(177, 77, 255),
+        accent_text: rgb(2, 26, 33),
         gold: rgb(243, 207, 106),
         green: rgb(87, 224, 160),
         red: rgb(255, 93, 108),
-        slate: rgb(128, 149, 173),
+        slate: rgb(140, 150, 190),
     },
 ];
 
@@ -500,25 +511,15 @@ impl Alurtmee {
             AuthState::Authenticated(u) => format!("@{}", u.login),
             _ => "not signed in".to_string(),
         };
-        let names: Vec<String> = SKINS.iter().map(|sk| sk.name.to_string()).collect();
-        let picker = pick_list(
-            names,
-            Some(self.skin().name.to_string()),
-            Message::SelectSkin,
-        )
-        .text_size(13)
-        .padding([5, 10]);
-
         row![
             brand_mark(),
-            text("Alurtmee").size(27).color(s.text),
+            text("Alurtmee").size(32).color(s.text),
             text(signed_in).size(13).color(s.muted),
             horizontal_space(),
             checkbox("Notifications", self.notifications_enabled)
                 .on_toggle(Message::SetNotifications)
                 .size(16)
                 .text_size(13),
-            picker,
             ghost_button("⚙ Settings", Message::ShowSettings(!self.show_settings)),
         ]
         .spacing(12)
@@ -679,14 +680,14 @@ impl Alurtmee {
             .style(move |_t: &Theme, st: button::Status| {
                 let hover = matches!(st, button::Status::Hovered);
                 let bg = if selected {
-                    mix(s.accent, s.surface, 0.16)
+                    mix(s.accent, s.surface, 0.22)
                 } else if hover {
-                    mix(s.text, s.surface, 0.05)
+                    mix(s.accent, s.surface, 0.08)
                 } else {
                     mix(s.text, s.surface, 0.03)
                 };
                 let border_color = if selected {
-                    mix(s.accent, s.surface, 0.65)
+                    s.accent2
                 } else if is_security {
                     s.gold
                 } else {
@@ -697,7 +698,13 @@ impl Alurtmee {
                     text_color: s.text,
                     border: Border {
                         color: border_color,
-                        width: if selected || is_security { 1.0 } else { 0.0 },
+                        width: if selected {
+                            1.5
+                        } else if is_security {
+                            1.0
+                        } else {
+                            0.0
+                        },
                         radius: 11.0.into(),
                     },
                     ..Default::default()
@@ -852,9 +859,29 @@ impl Alurtmee {
             }
         };
 
+        let names: Vec<String> = SKINS.iter().map(|sk| sk.name.to_string()).collect();
+        let theme_picker = pick_list(
+            names,
+            Some(self.skin().name.to_string()),
+            Message::SelectSkin,
+        )
+        .text_size(13)
+        .padding([6, 12]);
+
         let mut panel = column![
             text("Settings").size(20).color(s.text),
             text(identity).size(14).color(s.muted),
+            rule(s),
+            text("Theme").size(15).color(s.text),
+            row![
+                theme_picker,
+                text("Pick a look — your choice is remembered.")
+                    .size(12)
+                    .color(s.muted),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+            rule(s),
             text("GitHub personal access token").size(13).color(s.text),
             text_input("ghp_…", self.model.pat_input())
                 .on_input(Message::PatInputChanged)
@@ -968,9 +995,9 @@ fn rule(s: Skin) -> Element<'static, Message> {
 /// The Alurtmee mascot, rendered crisply from a bundled 128px PNG.
 fn brand_mark() -> Element<'static, Message> {
     let handle = image::Handle::from_bytes(LOGO_BYTES);
-    container(image(handle).width(44).height(44))
-        .width(44)
-        .height(44)
+    container(image(handle).width(64).height(64))
+        .width(64)
+        .height(64)
         .into()
 }
 

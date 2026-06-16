@@ -18,5 +18,5 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-8 | Phase 5 — CI/CD timing + alerts (Actions runs, p75/p90 baseline, slow-flag, Linux notifications) | `feat/ALRT-8-phase-5-ci-timing` | Merged |
 | ALRT-9 | Phase 6 — Filters + Polish (composable filter chips, focus/blur cadence, dark theming, empty/error states) | `feat/ALRT-9-phase-6-filters-polish` | Done |
 | ALRT-12 | Brand logo asset + themes/UI polish (Nebula+Ionix, dual-neon, rounded skin-styled controls) | `feat/ALRT-12-logo-and-theme` | Merged |
-| ALRT-13 | SOLID Stage 1 — DIP seams: `GhApi`/`PollStore` ports, generic `Poller<C,S>`, fake-driven unit tests | `feat/ALRT-13-testability-seams` | In Progress |
+| ALRT-13 | SOLID Stage 1 — DIP seams: `GhApi`/`PollStore` ports, generic `Poller<C,S>`, fake-driven unit tests | `feat/ALRT-13-testability-seams` | Merged |
 | ALRT-14 | SOLID Stage 3 — split `app/main.rs` (theme registry, view/ helpers, per-pane views, update handlers) | `feat/ALRT-14-split-main` | Planned |

@@ -1,18 +1,16 @@
 //! Alurtmee desktop application entry point.
 //!
-//! The window is a single dashboard: a Settings panel (PAT → keychain, repo selection), a filter
-//! bar of toggle-chips, a CI-alerts strip, and the live pull-request feed with classification chips
-//! and enrichment detail. Theming, layout, and styling land in Phase 6.
+//! A two-pane dashboard — a filtered master list of pull requests on the left, the selected PR's
+//! detail (classification, CI status, reviews, comments) on the right, a CI-alerts strip, and a
+//! Settings view for auth + repo selection. Ships five selectable dark themes (Phase 6).
 //!
-//! **Why Iced's Elm/`application` model fits here (MASTER §3.6):** Alurtmee is idle most of the
-//! time — it polls on a slow cadence and the UI only redraws *in response to a `Message`*, so an
-//! idle dashboard costs ~no CPU between updates (NFR2). The unidirectional `state → view → message
-//! → update` loop maps cleanly onto "poller emits events → state updates → widgets redraw" (AD-7).
+//! **Why Iced's Elm/`application` model fits here (§3.6):** the UI redraws *only on a `Message`*, so
+//! an idle dashboard costs ~no CPU between poll events (NFR2). `state → view → message → update`
+//! maps onto "poller emits events → state updates → widgets redraw" (AD-7).
 //!
 //! **Testability:** auth/scope logic lives in [`settings_model::SettingsModel`], the feed/filter in
-//! [`pr_list_model::PrListModel`] + `domain::Filter`, and all I/O in the `gh-client`/`store`/
-//! `poller` crates — each unit/acceptance tested. This `main` is the thin Iced shell, covered by the
-//! headless window smoke test.
+//! [`pr_list_model::PrListModel`] + `domain::Filter`, all I/O in `gh-client`/`store`/`poller` — each
+//! unit/acceptance tested. This `main` is the thin Iced shell, covered by the headless smoke test.
 
 mod demo;
 mod notification_dispatcher;
@@ -28,11 +26,15 @@ use std::time::Duration;
 use directories::ProjectDirs;
 use domain::{
     AuthState, AuthorKind, Category, CategoryKind, ChangeEvent, CiAlertKind, CommentKind, Filter,
-    Org, PollCadence, PrId, Repo, TestState, User,
+    Org, PollCadence, PrId, PullRequest, Repo, TestState, User,
 };
 use gh_client::GhClient;
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
-use iced::{Color, Element, Subscription, Task, Theme};
+use iced::theme::Palette;
+use iced::widget::{
+    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    text_input,
+};
+use iced::{Alignment, Border, Color, Element, Length, Subscription, Task, Theme};
 use poller::Poller;
 use store::{Keychain, Store};
 use tokio::sync::watch;
@@ -42,45 +44,149 @@ use crate::pr_list_model::PrListModel;
 use crate::settings_model::SettingsModel;
 use crate::xdg_notifier::XdgNotifier;
 
-/// Default GitHub REST base URL. Overridable via `ALURTMEE_GITHUB_BASE_URL` so the deferred live
-/// Integration Verification pass (and tests) can point at a mock server without code changes.
+/// Default GitHub REST base URL (override via `ALURTMEE_GITHUB_BASE_URL` for the §10 pass / tests).
 const DEFAULT_GITHUB_BASE_URL: &str = "https://api.github.com";
 
-/// Active polling interval (the cadence resets here on a change) and the backed-off idle ceiling.
 const POLL_BASE_INTERVAL: Duration = Duration::from_secs(30);
 const POLL_MAX_INTERVAL: Duration = Duration::from_secs(300);
 
-/// Config keys for persisted UI preferences.
 const CONFIG_NOTIFICATIONS: &str = "notifications_enabled";
 const CONFIG_THEME: &str = "theme";
 
-// Badge colours (work on the dark theme; readable on light too).
-const GREEN: Color = Color::from_rgb(0.30, 0.78, 0.45);
-const RED: Color = Color::from_rgb(0.90, 0.35, 0.35);
-const AMBER: Color = Color::from_rgb(0.92, 0.70, 0.25);
-const BLUE: Color = Color::from_rgb(0.40, 0.62, 0.95);
-const GREY: Color = Color::from_rgb(0.60, 0.60, 0.64);
+const MASTER_WIDTH: f32 = 320.0;
 
-/// The running application: the settings/feed models plus the I/O collaborators they drive.
+/// A theme: a named bundle of colours. Colour means status — green good, gold important, red bad;
+/// the accent is identity (selection, active filter, brand). Surfaces stay near-black.
+#[derive(Clone, Copy)]
+struct Skin {
+    name: &'static str,
+    bg: Color,
+    surface: Color,
+    border: Color,
+    text: Color,
+    muted: Color,
+    accent: Color,
+    accent_text: Color,
+    gold: Color,
+    green: Color,
+    red: Color,
+    slate: Color,
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: 1.0,
+    }
+}
+
+const SKINS: [Skin; 5] = [
+    Skin {
+        name: "Aurora",
+        bg: rgb(8, 11, 11),
+        surface: rgb(16, 24, 22),
+        border: rgb(31, 48, 45),
+        text: rgb(234, 243, 239),
+        muted: rgb(134, 163, 155),
+        accent: rgb(47, 224, 196),
+        accent_text: rgb(4, 32, 25),
+        gold: rgb(243, 207, 115),
+        green: rgb(95, 217, 154),
+        red: rgb(247, 109, 109),
+        slate: rgb(134, 163, 155),
+    },
+    Skin {
+        name: "Velvet",
+        bg: rgb(10, 8, 14),
+        surface: rgb(21, 18, 29),
+        border: rgb(42, 35, 56),
+        text: rgb(241, 236, 247),
+        muted: rgb(162, 148, 180),
+        accent: rgb(207, 149, 255),
+        accent_text: rgb(27, 15, 41),
+        gold: rgb(240, 198, 116),
+        green: rgb(122, 217, 154),
+        red: rgb(247, 109, 109),
+        slate: rgb(162, 148, 180),
+    },
+    Skin {
+        name: "Synthwave",
+        bg: rgb(10, 7, 16),
+        surface: rgb(22, 15, 29),
+        border: rgb(46, 31, 58),
+        text: rgb(246, 238, 247),
+        muted: rgb(169, 143, 176),
+        accent: rgb(255, 69, 224),
+        accent_text: rgb(33, 4, 28),
+        gold: rgb(243, 207, 106),
+        green: rgb(86, 224, 160),
+        red: rgb(255, 93, 108),
+        slate: rgb(169, 143, 176),
+    },
+    Skin {
+        name: "Voltage",
+        bg: rgb(2, 3, 1),
+        surface: rgb(7, 9, 3),
+        border: rgb(38, 49, 27),
+        text: rgb(238, 244, 231),
+        muted: rgb(139, 151, 125),
+        accent: rgb(182, 255, 58),
+        accent_text: rgb(22, 33, 10),
+        gold: rgb(240, 197, 96),
+        green: rgb(82, 217, 138),
+        red: rgb(255, 93, 108),
+        slate: rgb(139, 151, 125),
+    },
+    Skin {
+        name: "Ionix",
+        bg: rgb(6, 10, 14),
+        surface: rgb(14, 23, 34),
+        border: rgb(29, 48, 69),
+        text: rgb(233, 242, 251),
+        muted: rgb(128, 149, 173),
+        accent: rgb(33, 230, 255),
+        accent_text: rgb(3, 33, 42),
+        gold: rgb(243, 207, 106),
+        green: rgb(87, 224, 160),
+        red: rgb(255, 93, 108),
+        slate: rgb(128, 149, 173),
+    },
+];
+
+/// Build the Iced theme that drives built-in widgets (inputs, checkboxes, scrollbars, pick-list).
+fn iced_theme(s: &Skin) -> Theme {
+    Theme::custom(
+        s.name.to_string(),
+        Palette {
+            background: s.bg,
+            text: s.text,
+            primary: s.accent,
+            success: s.green,
+            danger: s.red,
+        },
+    )
+}
+
+/// The running application.
 struct Alurtmee {
     model: SettingsModel,
     pr_list: PrListModel,
-    /// Composable feed filter (source × category chips).
     filter: Filter,
+    selected: Option<PrId>,
+    show_settings: bool,
+    /// Index into [`SKINS`].
+    skin: usize,
     keychain: Keychain,
     store: Store,
     base_url: String,
-    /// Built once a token is accepted; holds the token internally (redacted in `Debug`).
     client: Option<GhClient>,
-    /// Fires desktop notifications for CI alerts, de-duped per (run, kind).
     dispatcher: NotificationDispatcher<XdgNotifier>,
-    /// Window-focus signal handed to the running poller so it backs off when blurred.
     focus_tx: watch::Sender<bool>,
     notifications_enabled: bool,
-    dark_theme: bool,
 }
 
-/// Messages that drive state transitions.
 #[derive(Debug, Clone)]
 enum Message {
     PatInputChanged(String),
@@ -92,14 +198,14 @@ enum Message {
     CorrectCategory(PrId, CategoryKind),
     ToggleSourceFilter(AuthorKind),
     ToggleCategoryFilter(CategoryKind),
+    SelectPr(PrId),
+    ShowSettings(bool),
     FocusChanged(bool),
     SetNotifications(bool),
-    ToggleTheme,
+    SelectSkin(String),
 }
 
 impl Alurtmee {
-    /// Open persistent storage, restore the saved selection + UI preferences, and (in demo mode)
-    /// seed sample feed data. Storage failures fall back to in-memory so the window always boots.
     fn boot() -> (Self, Task<Message>) {
         let store = open_store();
         let selection = store.load_selection().unwrap_or_else(|err| {
@@ -114,21 +220,20 @@ impl Alurtmee {
             .flatten()
             .map(|v| v != "false")
             .unwrap_or(true);
-        let dark_theme = store
+        let skin = store
             .get_config(CONFIG_THEME)
             .ok()
             .flatten()
-            .map(|v| v != "light")
-            .unwrap_or(true);
+            .and_then(|name| SKINS.iter().position(|s| s.name == name))
+            .unwrap_or(3); // Voltage
 
-        // Manual UI review aid: pre-populate the feed so the dashboard can be eyeballed without a
-        // token. Never active in normal runs.
         let mut pr_list = PrListModel::new();
         if std::env::var_os("ALURTMEE_DEMO").is_some() {
             for event in demo::demo_events() {
                 pr_list.apply(event);
             }
         }
+        let selected = pr_list.prs().first().map(|pr| pr.id.clone());
 
         let (focus_tx, _) = watch::channel(true);
 
@@ -136,6 +241,9 @@ impl Alurtmee {
             model: SettingsModel::new().with_selection(selection),
             pr_list,
             filter: Filter::new(),
+            selected,
+            show_settings: false,
+            skin,
             keychain: Keychain::new(),
             store,
             base_url,
@@ -143,17 +251,16 @@ impl Alurtmee {
             dispatcher: NotificationDispatcher::new(XdgNotifier),
             focus_tx,
             notifications_enabled,
-            dark_theme,
         };
         (app, Task::none())
     }
 
+    fn skin(&self) -> Skin {
+        SKINS[self.skin]
+    }
+
     fn theme(&self) -> Theme {
-        if self.dark_theme {
-            Theme::Dark
-        } else {
-            Theme::Light
-        }
+        iced_theme(&self.skin())
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -166,7 +273,6 @@ impl Alurtmee {
                 let Some(token) = self.model.start_validating() else {
                     return Task::none();
                 };
-                // The token is written to the OS keychain here — the only place it is persisted.
                 if let Err(err) = self.keychain.set_token(&token) {
                     self.model
                         .validation_failed(format!("Could not store token in keychain: {err}"));
@@ -224,13 +330,15 @@ impl Alurtmee {
                 Task::none()
             }
             Message::PollEvent(event) => {
-                // Fire a desktop notification for CI alerts (when enabled; de-duped in dispatcher).
                 if self.notifications_enabled {
                     if let ChangeEvent::CiAlert(alert) = &event {
                         self.dispatcher.dispatch(alert);
                     }
                 }
                 self.pr_list.apply(event);
+                if self.selected.is_none() {
+                    self.selected = self.pr_list.prs().first().map(|pr| pr.id.clone());
+                }
                 Task::none()
             }
             Message::CorrectCategory(id, kind) => {
@@ -255,8 +363,15 @@ impl Alurtmee {
                 self.filter.toggle_category(category);
                 Task::none()
             }
+            Message::SelectPr(id) => {
+                self.selected = Some(id);
+                Task::none()
+            }
+            Message::ShowSettings(show) => {
+                self.show_settings = show;
+                Task::none()
+            }
             Message::FocusChanged(focused) => {
-                // Hand the new focus state to the running poller (it reads this each cycle).
                 let _ = self.focus_tx.send(focused);
                 Task::none()
             }
@@ -267,19 +382,16 @@ impl Alurtmee {
                     .set_config(CONFIG_NOTIFICATIONS, if enabled { "true" } else { "false" });
                 Task::none()
             }
-            Message::ToggleTheme => {
-                self.dark_theme = !self.dark_theme;
-                let _ = self
-                    .store
-                    .set_config(CONFIG_THEME, if self.dark_theme { "dark" } else { "light" });
+            Message::SelectSkin(name) => {
+                if let Some(i) = SKINS.iter().position(|s| s.name == name) {
+                    self.skin = i;
+                    let _ = self.store.set_config(CONFIG_THEME, &name);
+                }
                 Task::none()
             }
         }
     }
 
-    /// Subscriptions: always listen for window focus/blur; additionally run the poller when
-    /// authenticated with a non-empty selection. The poller receives the focus signal so it backs
-    /// off while the window is blurred (NFR2).
     fn subscription(&self) -> Subscription<Message> {
         let focus = iced::event::listen_with(|event, _status, _id| match event {
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::FocusChanged(true)),
@@ -331,7 +443,7 @@ impl Alurtmee {
                     tokio::spawn(poller.run(repos, tx, focus_rx));
                     while let Some(event) = rx.recv().await {
                         if output.send(Message::PollEvent(event)).await.is_err() {
-                            break; // UI dropped the subscription
+                            break;
                         }
                     }
                 }
@@ -342,55 +454,381 @@ impl Alurtmee {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let content = column![
-            self.header(),
-            self.settings_panel(),
-            self.filter_bar(),
-            self.ci_alerts_panel(),
-            self.feed_panel(),
-        ]
-        .spacing(16)
-        .padding(20);
+        let s = self.skin();
+        let main = if self.show_settings || !self.has_feed() {
+            self.settings_view(s)
+        } else {
+            self.feed_view(s)
+        };
 
-        container(scrollable(content)).into()
+        let body = column![self.top_bar(s), self.ci_banner(s), main]
+            .spacing(14)
+            .padding(18)
+            .height(Length::Fill);
+
+        container(body)
+            .style(move |_t: &Theme| container::Style {
+                background: Some(s.bg.into()),
+                text_color: Some(s.text),
+                ..Default::default()
+            })
+            .into()
     }
 
-    /// Title row + theme / notifications toggles.
-    fn header(&self) -> Element<'_, Message> {
-        let theme_label = if self.dark_theme {
-            "◐ Dark"
-        } else {
-            "◑ Light"
+    fn has_feed(&self) -> bool {
+        self.model.auth().is_authenticated() || !self.pr_list.is_empty()
+    }
+
+    fn top_bar(&self, s: Skin) -> Element<'_, Message> {
+        let signed_in = match self.model.auth() {
+            AuthState::Authenticated(u) => format!("@{}", u.login),
+            _ => "not signed in".to_string(),
         };
+        let names: Vec<String> = SKINS.iter().map(|sk| sk.name.to_string()).collect();
+        let picker = pick_list(
+            names,
+            Some(self.skin().name.to_string()),
+            Message::SelectSkin,
+        )
+        .text_size(13)
+        .padding([5, 10]);
+
         row![
-            text("Alurtmee").size(28),
-            iced::widget::horizontal_space(),
+            brand_dot(s),
+            text("Alurtmee").size(24).color(s.text),
+            text(signed_in).size(13).color(s.muted),
+            horizontal_space(),
             checkbox("Notifications", self.notifications_enabled)
-                .on_toggle(Message::SetNotifications),
-            button(text(theme_label).size(13))
-                .on_press(Message::ToggleTheme)
-                .style(button::secondary),
+                .on_toggle(Message::SetNotifications)
+                .size(16)
+                .text_size(13),
+            picker,
+            ghost_button("⚙ Settings", Message::ShowSettings(!self.show_settings)),
         ]
         .spacing(12)
-        .align_y(iced::Alignment::Center)
+        .align_y(Alignment::Center)
         .into()
     }
 
-    /// Auth + repo-selection settings, in a card.
-    fn settings_panel(&self) -> Element<'_, Message> {
+    fn ci_banner(&self, s: Skin) -> Element<'_, Message> {
+        let alerts = self.pr_list.ci_alerts();
+        if alerts.is_empty() {
+            return column![].into();
+        }
+        let failures = alerts
+            .iter()
+            .filter(|a| a.kind == CiAlertKind::Failure)
+            .count();
+        let slow = alerts.len() - failures;
+        let latest = alerts
+            .last()
+            .map(|a| format!("latest: {} · {}", a.repo, a.reason))
+            .unwrap_or_default();
+
+        let inner = row![
+            dot(s.red),
+            text(format!("{failures} failed")).size(13).color(s.text),
+            dot(s.gold),
+            text(format!("{slow} slow")).size(13).color(s.text),
+            text(latest).size(12).color(s.muted),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        container(inner)
+            .padding([9, 14])
+            .width(Length::Fill)
+            .style(move |_t: &Theme| panel_style(s, 12.0))
+            .into()
+    }
+
+    fn feed_view(&self, s: Skin) -> Element<'_, Message> {
+        let master = card(
+            s,
+            column![
+                self.filter_bar(s),
+                rule(s),
+                scrollable(column(self.pr_rows(s)).spacing(9).padding([0, 6])).height(Length::Fill),
+            ]
+            .spacing(12),
+        )
+        .width(Length::Fixed(MASTER_WIDTH));
+
+        let detail = card(s, self.detail_pane(s)).width(Length::Fill);
+
+        row![master, detail].spacing(14).height(Length::Fill).into()
+    }
+
+    fn filter_bar(&self, s: Skin) -> Element<'_, Message> {
+        let shown = self.visible_prs().count();
+        let total = self.pr_list.len();
+        let count = if self.filter.is_active() {
+            format!("{shown}/{total}")
+        } else {
+            format!("{total}")
+        };
+
+        column![
+            row![
+                text("Pull requests").size(16).color(s.text),
+                horizontal_space(),
+                text(count).size(13).color(s.muted)
+            ]
+            .align_y(Alignment::Center),
+            row![
+                chip(
+                    s,
+                    "human",
+                    self.filter.is_source_active(AuthorKind::Human),
+                    Message::ToggleSourceFilter(AuthorKind::Human)
+                ),
+                chip(
+                    s,
+                    "bot",
+                    self.filter.is_source_active(AuthorKind::Bot),
+                    Message::ToggleSourceFilter(AuthorKind::Bot)
+                ),
+                chip(
+                    s,
+                    "feature",
+                    self.filter.is_category_active(CategoryKind::Feature),
+                    Message::ToggleCategoryFilter(CategoryKind::Feature)
+                ),
+                chip(
+                    s,
+                    "security",
+                    self.filter.is_category_active(CategoryKind::Security),
+                    Message::ToggleCategoryFilter(CategoryKind::Security)
+                ),
+            ]
+            .spacing(6),
+        ]
+        .spacing(10)
+        .into()
+    }
+
+    fn pr_rows(&self, s: Skin) -> Vec<Element<'_, Message>> {
+        let visible: Vec<&PullRequest> = self.visible_prs().collect();
+        if visible.is_empty() {
+            let msg = if self.pr_list.is_empty() {
+                "No pull requests yet — the poller will fill this in."
+            } else {
+                "Nothing matches the active filters."
+            };
+            return vec![text(msg).size(13).color(s.muted).into()];
+        }
+        visible.into_iter().map(|pr| self.pr_row(s, pr)).collect()
+    }
+
+    fn pr_row(&self, s: Skin, pr: &PullRequest) -> Element<'_, Message> {
+        let selected = self.selected.as_ref() == Some(&pr.id);
+        let status = self
+            .pr_list
+            .enrichment(&pr.id)
+            .map(|e| test_color(s, e.tests.state))
+            .unwrap_or(s.slate);
+
+        let is_security = self
+            .pr_list
+            .classification(&pr.id)
+            .map(|c| c.category.kind == CategoryKind::Security)
+            .unwrap_or(false);
+
+        let mut meta = row![text(pr.id.repo.clone()).size(11).color(s.muted)].spacing(6);
+        if let Some(c) = self.pr_list.classification(&pr.id) {
+            meta = meta.push(pill(source_label(c.author_kind), s.slate));
+            meta = meta.push(pill(
+                category_label(c.category.kind),
+                category_color(s, c.category.kind),
+            ));
+        }
+
+        let content = column![
+            row![
+                dot(status),
+                text(format!("#{}  {}", pr.id.number, pr.title))
+                    .size(14)
+                    .color(s.text),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            meta,
+        ]
+        .spacing(6);
+
+        button(content)
+            .on_press(Message::SelectPr(pr.id.clone()))
+            .width(Length::Fill)
+            .padding(10)
+            .style(move |_t: &Theme, st: button::Status| {
+                let hover = matches!(st, button::Status::Hovered);
+                let bg = if selected {
+                    mix(s.accent, s.surface, 0.16)
+                } else if hover {
+                    mix(s.text, s.surface, 0.05)
+                } else {
+                    mix(s.text, s.surface, 0.03)
+                };
+                let border_color = if selected {
+                    mix(s.accent, s.surface, 0.65)
+                } else if is_security {
+                    s.gold
+                } else {
+                    Color::TRANSPARENT
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    text_color: s.text,
+                    border: Border {
+                        color: border_color,
+                        width: if selected || is_security { 1.0 } else { 0.0 },
+                        radius: 11.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
+    }
+
+    fn detail_pane(&self, s: Skin) -> Element<'_, Message> {
+        let Some(pr) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.pr_list.prs().iter().find(|p| &p.id == id))
+        else {
+            return container(
+                text("Select a pull request to see details.")
+                    .size(14)
+                    .color(s.muted),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into();
+        };
+
+        let draft = if pr.draft { "  · draft" } else { "" };
+        let mut detail = column![
+            text(format!("{}{}", pr.title, draft))
+                .size(20)
+                .color(s.text),
+            text(format!(
+                "{}#{}  ·  @{}",
+                pr.id.repo, pr.id.number, pr.author
+            ))
+            .size(13)
+            .color(s.muted),
+        ]
+        .spacing(6);
+
+        if let Some(c) = self.pr_list.classification(&pr.id) {
+            detail = detail.push(
+                row![
+                    pill(source_label(c.author_kind), s.slate),
+                    pill(
+                        category_label(c.category.kind),
+                        category_color(s, c.category.kind)
+                    ),
+                    text(format!("why: {}", c.category.signal))
+                        .size(11)
+                        .color(s.muted),
+                    horizontal_space(),
+                    ghost_button(
+                        "→ feature",
+                        Message::CorrectCategory(pr.id.clone(), CategoryKind::Feature)
+                    ),
+                    ghost_button(
+                        "→ security",
+                        Message::CorrectCategory(pr.id.clone(), CategoryKind::Security)
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        if let Some(e) = self.pr_list.enrichment(&pr.id) {
+            detail = detail.push(rule(s));
+            detail = detail.push(
+                row![
+                    dot(test_color(s, e.tests.state)),
+                    text(test_label(e.tests.state))
+                        .size(14)
+                        .color(test_color(s, e.tests.state)),
+                    text(format!(
+                        "{} passed · {} failed · {} pending",
+                        e.tests.passed, e.tests.failed, e.tests.pending
+                    ))
+                    .size(12)
+                    .color(s.muted),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+
+            detail = detail.push(
+                text(format!("Reviews ({})", e.reviews.len()))
+                    .size(14)
+                    .color(s.text),
+            );
+            if e.reviews.is_empty() {
+                detail = detail.push(text("  none").size(12).color(s.muted));
+            }
+            for review in &e.reviews {
+                detail = detail.push(
+                    row![
+                        pill(&review.state, review_color(s, &review.state)),
+                        text(format!("@{}", review.author)).size(13).color(s.text),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+
+            detail = detail.push(
+                text(format!("Comments ({})", e.comments.len()))
+                    .size(14)
+                    .color(s.text),
+            );
+            if e.comments.is_empty() {
+                detail = detail.push(text("  none").size(12).color(s.muted));
+            }
+            for comment in &e.comments {
+                let kind = match comment.kind {
+                    CommentKind::Issue => "issue",
+                    CommentKind::Review => "review",
+                };
+                detail = detail.push(
+                    column![
+                        text(format!("@{} · {kind}", comment.author))
+                            .size(12)
+                            .color(s.muted),
+                        text(comment.body.clone()).size(13).color(s.text),
+                    ]
+                    .spacing(2),
+                );
+            }
+        } else {
+            detail = detail.push(
+                text("Enrichment loads when the PR next changes.")
+                    .size(12)
+                    .color(s.muted),
+            );
+        }
+
+        scrollable(detail.spacing(12)).height(Length::Fill).into()
+    }
+
+    fn settings_view(&self, s: Skin) -> Element<'_, Message> {
         let identity = match self.model.auth() {
             AuthState::Authenticated(user) => format!("Signed in as {}", user.login),
             AuthState::Invalid(reason) => format!("Not signed in — {reason}"),
             AuthState::Unauthenticated => "Not signed in".to_string(),
         };
 
-        let pat = text_input("Personal access token", self.model.pat_input())
-            .on_input(Message::PatInputChanged)
-            .secure(true)
-            .padding(8);
-
         let validate = {
-            let b = button(text("Validate")).style(button::primary);
+            let b = button(text("Validate"))
+                .padding([8, 16])
+                .style(button::primary);
             if self.model.is_busy() {
                 b
             } else {
@@ -399,26 +837,38 @@ impl Alurtmee {
         };
 
         let mut panel = column![
-            text(identity).size(15),
-            text("GitHub personal access token").size(13),
-            pat,
+            text("Settings").size(20).color(s.text),
+            text(identity).size(14).color(s.muted),
+            text("GitHub personal access token").size(13).color(s.text),
+            text_input("ghp_…", self.model.pat_input())
+                .on_input(Message::PatInputChanged)
+                .secure(true)
+                .padding(10),
             validate,
-            text(self.model.status().to_string()).size(13),
+            text(self.model.status().to_string())
+                .size(13)
+                .color(s.muted),
         ]
-        .spacing(8);
+        .spacing(10);
 
         if !self.model.orgs().is_empty() {
             let logins: Vec<&str> = self.model.orgs().iter().map(|o| o.login.as_str()).collect();
-            panel = panel.push(text(format!("Organizations: {}", logins.join(", "))).size(13));
+            panel = panel.push(
+                text(format!("Organizations: {}", logins.join(", ")))
+                    .size(12)
+                    .color(s.muted),
+            );
         }
 
         if !self.model.repos().is_empty() {
+            panel = panel.push(rule(s));
             panel = panel.push(
                 text(format!(
                     "Repositories ({} selected)",
                     self.model.selection().len()
                 ))
-                .size(14),
+                .size(15)
+                .color(s.text),
             );
             let repos: Vec<Element<Message>> = self
                 .model
@@ -437,146 +887,23 @@ impl Alurtmee {
                         .into()
                 })
                 .collect();
-            panel = panel.push(scrollable(column(repos).spacing(4)).height(140));
+            panel = panel.push(scrollable(column(repos).spacing(6)).height(Length::Fill));
         }
 
-        card(panel.into())
-    }
+        if self.has_feed() {
+            panel = panel.push(ghost_button("← Back to feed", Message::ShowSettings(false)));
+        }
 
-    /// Source × category filter chips with a live "showing N of M" count.
-    fn filter_bar(&self) -> Element<'_, Message> {
-        let sources = row![
-            text("Source:").size(13),
-            chip(
-                "human",
-                self.filter.is_source_active(AuthorKind::Human),
-                Message::ToggleSourceFilter(AuthorKind::Human)
-            ),
-            chip(
-                "bot",
-                self.filter.is_source_active(AuthorKind::Bot),
-                Message::ToggleSourceFilter(AuthorKind::Bot)
-            ),
+        row![
+            horizontal_space(),
+            card(s, panel).width(Length::Fixed(560.0)),
+            horizontal_space()
         ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center);
-
-        let categories = row![
-            text("Kind:").size(13),
-            chip(
-                "feature",
-                self.filter.is_category_active(CategoryKind::Feature),
-                Message::ToggleCategoryFilter(CategoryKind::Feature)
-            ),
-            chip(
-                "security",
-                self.filter.is_category_active(CategoryKind::Security),
-                Message::ToggleCategoryFilter(CategoryKind::Security)
-            ),
-            chip(
-                "unknown",
-                self.filter.is_category_active(CategoryKind::Unknown),
-                Message::ToggleCategoryFilter(CategoryKind::Unknown)
-            ),
-        ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center);
-
-        let shown = self.visible_prs().count();
-        let total = self.pr_list.len();
-        let summary = if self.filter.is_active() {
-            format!("showing {shown} of {total}")
-        } else {
-            format!("{total} pull requests")
-        };
-
-        card(
-            column![
-                row![
-                    text("Filters").size(16),
-                    iced::widget::horizontal_space(),
-                    text(summary).size(13)
-                ]
-                .align_y(iced::Alignment::Center),
-                sources,
-                categories,
-            ]
-            .spacing(8)
-            .into(),
-        )
+        .height(Length::Fill)
+        .into()
     }
 
-    /// CI alerts strip (failures / slow runs), coloured.
-    fn ci_alerts_panel(&self) -> Element<'_, Message> {
-        let alerts = self.pr_list.ci_alerts();
-        let header = text(format!("CI alerts ({})", alerts.len())).size(16);
-        if alerts.is_empty() {
-            return card(
-                column![header, text("No CI alerts.").size(13).style(grey)]
-                    .spacing(6)
-                    .into(),
-            );
-        }
-        let rows: Vec<Element<Message>> = alerts
-            .iter()
-            .map(|alert| {
-                let (tag, color) = match alert.kind {
-                    CiAlertKind::Failure => ("FAILED", RED),
-                    CiAlertKind::SlowCi => ("SLOW", AMBER),
-                };
-                row![
-                    badge(tag, color),
-                    text(format!("{} · {}", alert.repo, alert.reason)).size(13),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center)
-                .into()
-            })
-            .collect();
-        card(column![header, column(rows).spacing(6)].spacing(8).into())
-    }
-
-    /// The pull-request feed (filtered), each PR a styled card. Renders empty/auth states.
-    fn feed_panel(&self) -> Element<'_, Message> {
-        if !self.model.auth().is_authenticated() {
-            return card(
-                text("Validate a token and select repositories to start watching pull requests.")
-                    .size(14)
-                    .style(grey)
-                    .into(),
-            );
-        }
-        if self.model.selection().is_empty() {
-            return card(
-                text("No repositories selected — pick some above to populate the feed.")
-                    .size(14)
-                    .style(grey)
-                    .into(),
-            );
-        }
-
-        let visible: Vec<Element<Message>> =
-            self.visible_prs().map(|pr| self.pr_card(pr)).collect();
-        let header = text(format!("Open pull requests ({})", visible.len())).size(18);
-
-        if visible.is_empty() {
-            let msg = if self.pr_list.is_empty() {
-                "No open pull requests yet — the poller will fill this in."
-            } else {
-                "No pull requests match the active filters."
-            };
-            return column![header, card(text(msg).size(14).style(grey).into())]
-                .spacing(8)
-                .into();
-        }
-
-        column![header, column(visible).spacing(10)]
-            .spacing(8)
-            .into()
-    }
-
-    /// PRs passing the active filter (unclassified PRs are always shown).
-    fn visible_prs(&self) -> impl Iterator<Item = &domain::PullRequest> {
+    fn visible_prs(&self) -> impl Iterator<Item = &PullRequest> {
         self.pr_list
             .prs()
             .iter()
@@ -585,131 +912,195 @@ impl Alurtmee {
                 None => true,
             })
     }
+}
 
-    /// One pull request rendered as a card: title, classification chips + correction, enrichment.
-    fn pr_card(&self, pr: &domain::PullRequest) -> Element<'_, Message> {
-        let draft = if pr.draft { "  · draft" } else { "" };
-        let mut body = column![text(format!(
-            "{}#{}  {}{}",
-            pr.id.repo, pr.id.number, pr.title, draft
-        ))
-        .size(15)]
-        .spacing(6);
+// ---- view helpers ---------------------------------------------------------
 
-        body = body.push(text(format!("@{}", pr.author)).size(12).style(grey));
-
-        if let Some(classification) = self.pr_list.classification(&pr.id) {
-            let (src_label, src_color) = match classification.author_kind {
-                AuthorKind::Human => ("human", BLUE),
-                AuthorKind::Bot => ("bot", GREY),
-            };
-            let (cat_label, cat_color) = match classification.category.kind {
-                CategoryKind::Feature => ("feature", BLUE),
-                CategoryKind::Security => ("security", RED),
-                CategoryKind::Unknown => ("unknown", GREY),
-            };
-            body = body.push(
-                row![
-                    badge(src_label, src_color),
-                    badge(cat_label, cat_color),
-                    text(format!("why: {}", classification.category.signal))
-                        .size(11)
-                        .style(grey),
-                    iced::widget::horizontal_space(),
-                    button(text("→feature").size(11))
-                        .on_press(Message::CorrectCategory(
-                            pr.id.clone(),
-                            CategoryKind::Feature
-                        ))
-                        .style(button::secondary),
-                    button(text("→security").size(11))
-                        .on_press(Message::CorrectCategory(
-                            pr.id.clone(),
-                            CategoryKind::Security
-                        ))
-                        .style(button::secondary),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
-            );
-        }
-
-        if let Some(enrichment) = self.pr_list.enrichment(&pr.id) {
-            let (badge_label, badge_color) = match enrichment.tests.state {
-                TestState::Passing => ("tests passing", GREEN),
-                TestState::Failing => ("tests failing", RED),
-                TestState::Pending => ("tests pending", AMBER),
-                TestState::None => ("no tests", GREY),
-            };
-            body = body.push(
-                row![
-                    badge(badge_label, badge_color),
-                    text(format!(
-                        "passed {} · failed {} · pending {} · {} reviews · {} comments",
-                        enrichment.tests.passed,
-                        enrichment.tests.failed,
-                        enrichment.tests.pending,
-                        enrichment.reviews.len(),
-                        enrichment.comments.len(),
-                    ))
-                    .size(12)
-                    .style(grey),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-            );
-            for review in &enrichment.reviews {
-                body = body
-                    .push(text(format!("  review @{}: {}", review.author, review.state)).size(12));
-            }
-            for comment in &enrichment.comments {
-                let kind = match comment.kind {
-                    CommentKind::Issue => "issue",
-                    CommentKind::Review => "review",
-                };
-                let preview: String = comment.body.chars().take(80).collect();
-                body = body.push(text(format!("  {kind} @{}: {preview}", comment.author)).size(12));
-            }
-        }
-
-        card(body.into())
+fn panel_style(s: Skin, radius: f32) -> container::Style {
+    container::Style {
+        background: Some(s.surface.into()),
+        border: Border {
+            color: s.border,
+            width: 1.0,
+            radius: radius.into(),
+        },
+        text_color: Some(s.text),
+        ..Default::default()
     }
 }
 
-/// Wrap content in a rounded, padded card.
-fn card(content: Element<'_, Message>) -> Element<'_, Message> {
+fn card<'a>(
+    s: Skin,
+    content: impl Into<Element<'a, Message>>,
+) -> iced::widget::Container<'a, Message> {
     container(content)
-        .style(container::rounded_box)
-        .padding(14)
-        .width(iced::Length::Fill)
+        .padding(16)
+        .style(move |_t: &Theme| panel_style(s, 14.0))
+}
+
+fn rule(s: Skin) -> Element<'static, Message> {
+    container(horizontal_space())
+        .width(Length::Fill)
+        .height(1)
+        .style(move |_t: &Theme| container::Style {
+            background: Some(s.border.into()),
+            ..Default::default()
+        })
         .into()
 }
 
-/// A small coloured badge.
-fn badge(label: &str, color: Color) -> Element<'static, Message> {
-    text(label.to_uppercase())
-        .size(11)
-        .style(move |_theme: &Theme| text::Style { color: Some(color) })
+fn brand_dot(s: Skin) -> Element<'static, Message> {
+    container(horizontal_space())
+        .width(11)
+        .height(11)
+        .style(move |_t: &Theme| container::Style {
+            background: Some(s.accent.into()),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        })
         .into()
 }
 
-/// Grey secondary text style.
-fn grey(_theme: &Theme) -> text::Style {
-    text::Style { color: Some(GREY) }
+fn dot(color: Color) -> Element<'static, Message> {
+    container(horizontal_space())
+        .width(10)
+        .height(10)
+        .style(move |_t: &Theme| container::Style {
+            background: Some(color.into()),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 5.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
-/// A filter toggle-chip: primary when active, secondary when not.
-fn chip<'a>(label: &'a str, active: bool, msg: Message) -> Element<'a, Message> {
-    let b = button(text(label).size(12)).padding([4, 10]).on_press(msg);
-    if active {
-        b.style(button::primary).into()
-    } else {
-        b.style(button::secondary).into()
+fn pill(label: &str, color: Color) -> Element<'static, Message> {
+    let owned = label.to_string();
+    container(
+        text(owned)
+            .size(11)
+            .style(move |_t: &Theme| text::Style { color: Some(color) }),
+    )
+    .padding([2, 8])
+    .style(move |_t: &Theme| container::Style {
+        background: Some(tint(color, 0.16).into()),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 9.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn chip<'a>(s: Skin, label: &'a str, active: bool, msg: Message) -> Element<'a, Message> {
+    button(text(label).size(13))
+        .padding([5, 12])
+        .on_press(msg)
+        .style(move |_t: &Theme, st: button::Status| {
+            let hover = matches!(st, button::Status::Hovered);
+            let (bg, fg) = if active {
+                (s.accent, s.accent_text)
+            } else if hover {
+                (mix(s.text, s.surface, 0.10), s.text)
+            } else {
+                (mix(s.text, s.surface, 0.04), s.text)
+            };
+            button::Style {
+                background: Some(bg.into()),
+                text_color: fg,
+                border: Border {
+                    color: if active { Color::TRANSPARENT } else { s.border },
+                    width: 1.0,
+                    radius: 14.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+fn ghost_button(label: &str, msg: Message) -> Element<'static, Message> {
+    button(text(label.to_string()).size(13))
+        .padding([5, 10])
+        .on_press(msg)
+        .style(button::secondary)
+        .into()
+}
+
+/// Linear blend: `a` mixed into `b` by `t` (0 = all b, 1 = all a).
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color {
+        r: b.r + (a.r - b.r) * t,
+        g: b.g + (a.g - b.g) * t,
+        b: b.b + (a.b - b.b) * t,
+        a: 1.0,
     }
 }
 
-/// Open the persistent SQLite store under the platform data directory, falling back to an
-/// in-memory store if the directory or database cannot be opened (so the window still launches).
+fn tint(color: Color, alpha: f32) -> Color {
+    Color { a: alpha, ..color }
+}
+
+fn test_color(s: Skin, state: TestState) -> Color {
+    match state {
+        TestState::Passing => s.green,
+        TestState::Failing => s.red,
+        TestState::Pending => s.gold,
+        TestState::None => s.slate,
+    }
+}
+
+fn test_label(state: TestState) -> &'static str {
+    match state {
+        TestState::Passing => "tests passing",
+        TestState::Failing => "tests failing",
+        TestState::Pending => "tests pending",
+        TestState::None => "no tests",
+    }
+}
+
+fn source_label(kind: AuthorKind) -> &'static str {
+    match kind {
+        AuthorKind::Human => "human",
+        AuthorKind::Bot => "bot",
+    }
+}
+
+fn category_label(kind: CategoryKind) -> &'static str {
+    match kind {
+        CategoryKind::Feature => "feature",
+        CategoryKind::Security => "security",
+        CategoryKind::Unknown => "unknown",
+    }
+}
+
+/// Security is *highlighted* (gold), not alarmed; everything else is neutral.
+fn category_color(s: Skin, kind: CategoryKind) -> Color {
+    match kind {
+        CategoryKind::Security => s.gold,
+        CategoryKind::Feature | CategoryKind::Unknown => s.slate,
+    }
+}
+
+fn review_color(s: Skin, state: &str) -> Color {
+    match state {
+        "APPROVED" => s.green,
+        "CHANGES_REQUESTED" => s.gold,
+        _ => s.slate,
+    }
+}
+
+// ---- plumbing -------------------------------------------------------------
+
 fn open_store() -> Store {
     match open_store_opt() {
         Some(store) => store,
@@ -720,14 +1111,10 @@ fn open_store() -> Store {
     }
 }
 
-/// Open the persistent store, or `None` if the data dir / database can't be opened. The poller
-/// opens its own connection (SQLite permits concurrent connections to one file) via this helper.
 fn open_store_opt() -> Option<Store> {
     data_db_path().and_then(|path| Store::open(&path).ok())
 }
 
-/// A stable subscription id for the poller, derived from the selected repos so the subscription is
-/// recreated (poller restarted) exactly when the selection changes.
 fn poll_subscription_id(repos: &[String]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "alurtmee-poller".hash(&mut hasher);
@@ -735,7 +1122,6 @@ fn poll_subscription_id(repos: &[String]) -> u64 {
     hasher.finish()
 }
 
-/// Compute the on-disk database path under the user's data directory, creating the directory.
 fn data_db_path() -> Option<String> {
     let dirs = ProjectDirs::from("com", "alurtmee", "alurtmee")?;
     let data_dir = dirs.data_dir();

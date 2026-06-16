@@ -288,13 +288,7 @@ impl GhClient {
         url: &str,
         etag: Option<&str>,
     ) -> Result<reqwest::Response, GhError> {
-        let mut req = self
-            .http
-            .get(url)
-            .bearer_auth(&self.token)
-            .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .header(reqwest::header::ACCEPT, ACCEPT)
-            .header("X-GitHub-Api-Version", API_VERSION);
+        let mut req = self.base_get(url);
         if let Some(tag) = etag {
             req = req.header(reqwest::header::IF_NONE_MATCH, tag);
         }
@@ -304,16 +298,19 @@ impl GhClient {
 
     /// Issue a single GET, applying the standard headers and mapping the response status.
     async fn send(&self, url: &str) -> Result<reqwest::Response, GhError> {
-        let resp = self
-            .http
+        let resp = self.base_get(url).send().await?;
+        map_status(resp)
+    }
+
+    /// A GET request builder carrying the standard auth + GitHub API headers that every request
+    /// shares. The one place those headers live, so a new endpoint inherits them for free.
+    fn base_get(&self, url: &str) -> reqwest::RequestBuilder {
+        self.http
             .get(url)
             .bearer_auth(&self.token)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::ACCEPT, ACCEPT)
             .header("X-GitHub-Api-Version", API_VERSION)
-            .send()
-            .await?;
-        map_status(resp)
     }
 
     /// GET a single JSON resource and decode it.

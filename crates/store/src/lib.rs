@@ -10,6 +10,11 @@ mod etag_record;
 mod keychain;
 mod migration;
 mod store;
+mod store_cache;
+mod store_ci;
+mod store_classifier;
+mod store_config;
+mod store_enrichment;
 
 pub use error::StoreError;
 pub use etag_record::EtagRecord;

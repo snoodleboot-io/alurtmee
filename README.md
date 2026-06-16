@@ -1,160 +1,101 @@
 # Alurtmee
 
-A lightweight, low-impact **desktop dashboard for watching GitHub pull requests** — written in
-Rust with [Iced](https://iced.rs). Alurtmee polls the repositories you care about, surfaces what
-changed, classifies and enriches each PR, flags slow or failed CI, and otherwise stays out of your
-way: it costs ~no CPU when idle and speaks to you through native desktop notifications.
+A calm desktop app for keeping an eye on your GitHub pull requests.
 
-> **Status:** Linux-only v1, in active development. The full pull-request pipeline (auth → poll →
-> diff → enrich → classify → CI timing → filter/theme) is built and tested against recorded GitHub
-> fixtures. Live verification against `api.github.com` and Linux packaging (AppImage/`.deb`) are the
-> remaining milestones.
+Point it at the repositories you care about and Alurtmee shows you — at a glance — which PRs are
+open, who's behind them, whether CI is passing, and what needs your attention. When a build fails or
+a workflow drags, it taps you on the shoulder with a desktop notification. The rest of the time it
+stays quiet and out of the way.
 
----
+> Try it with no setup: `ALURTMEE_DEMO=1 cargo run -p app` opens the dashboard filled with sample
+> data — no GitHub token, no network.
 
-## Highlights
+## What it does for you
 
-- **Two-pane dashboard** — a filtered list of open PRs on the left, full detail (reviews, comments,
-  CI status) of the selected PR on the right.
-- **Cheap, conditional polling** — ETag / `If-None-Match` conditional requests mean most poll
-  cycles are free `304`s; the cadence adapts and backs off ~4× while the window is blurred.
-- **Two-tier enrichment** — only PRs that actually changed are enriched (reviews, issue + review
-  comments, check-runs / combined status → a single pass/fail/pending verdict).
-- **Classification** — every PR is tagged **human / bot** and **feature / security / other** via a
-  layered classifier (labels → title/branch prefix → changed paths → Dependabot), with the firing
-  signal recorded and **user corrections** that persist and override.
-- **CI/CD timing + alerts** — pulls GitHub Actions run timings, learns a rolling **p90 baseline**
-  per workflow, flags runs that are too slow or failed, and fires **desktop notifications**.
-- **Composable filters** — toggle-chips over source × category narrow the feed live.
-- **Five dark themes** — Aurora, Velvet, Synthwave, Voltage, Ionix — switchable in-app and
-  persisted. Colour is disciplined: green = good, gold = important (security is *highlighted*, not
-  alarmed), red = bad only.
-- **Privacy-first** — your token lives in the **OS keychain only**, never in SQLite, config files,
-  or logs.
+- **All your pull requests in one window** — open PRs across the repos you pick, each with its
+  reviews, comment threads, and test status.
+- **Know what you're looking at** — every PR is tagged **human or bot** and **feature or security**,
+  with security changes highlighted. Got one wrong? Fix it in one click and it sticks.
+- **Catch trouble early** — a desktop notification the moment CI **fails** or a workflow runs
+  **slower than its usual time**, so you're not the last to find out.
+- **Cut the noise** — one-click filter chips ("just bots", "just security", …) narrow the feed.
+- **Make it yours** — five hand-built dark themes (Aurora, Velvet, Synthwave, Voltage, Ionix),
+  switchable on the fly.
+- **Light and private** — easy on CPU/battery (it polls less when the window isn't focused), and
+  your access token is stored **only in your system keychain** — never on disk, never in a log.
 
-Try the look without a token:
+## Installing
+
+Alurtmee runs on **Linux** today (macOS and Windows are planned). For now you build it from source;
+packaged installers (AppImage / `.deb`) are on the way.
+
+You'll need [Rust](https://rustup.rs) and a few system libraries:
 
 ```bash
-ALURTMEE_DEMO=1 cargo run -p app
-```
-
----
-
-## How it works
-
-Alurtmee is a Rust Cargo **workspace** of small, single-responsibility crates (ARD AD-7):
-
-| Crate        | Responsibility                                                                       |
-|--------------|--------------------------------------------------------------------------------------|
-| `domain`     | Pure types + classifiers/stats — no I/O, exhaustively unit-tested                    |
-| `gh-client`  | GitHub REST: auth, conditional requests, pagination, enrichment & Actions endpoints  |
-| `store`      | Bundled SQLite cache (ETags, PR/enrichment cache, config) + OS-keychain wrapper       |
-| `poller`     | Async scheduler + diff/change-detection; emits change events the UI subscribes to     |
-| `app`        | The Iced UI + binary; wires poller → store → UI and dispatches notifications           |
-
-Data flow: `poller` (tokio) → `gh-client` fetch → `store` persist + diff → emit events → Iced
-`subscription` → UI updates (only changed widgets redraw) → optional desktop notification.
-
-The UI is built with **Iced 0.13** (Elm architecture, `wgpu`-rendered), chosen for its
-retained-mode, redraw-on-event model — an idle dashboard does no work between poll cycles.
-
----
-
-## Getting started
-
-### Prerequisites (Linux)
-
-- **Rust** (stable; the workspace pins a recent toolchain via `rust-toolchain.toml`) and **Cargo**.
-- A desktop session with **GPU/Wayland or X11** (Iced renders via `wgpu`).
-- A running **Secret Service** (e.g. `gnome-keyring`) for token storage, over a D-Bus session.
-- A **notification daemon** (most desktops have one) for CI alerts.
-
-System libraries (Debian/Ubuntu names):
-
-```bash
+# Debian / Ubuntu
 sudo apt-get install -y \
   libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
   libgl1-mesa-dev mesa-vulkan-drivers \
   gnome-keyring dbus-x11
 ```
 
-> macOS and Windows are explicitly **post-v1** (platform seams — keychain, notifications, packaging,
-> windowing — are kept behind traits/`cfg` so adding them later is additive, not a rewrite).
-
-### Build & run
+Then:
 
 ```bash
-# build everything
-cargo build --workspace
-
-# run the app (binary is `alurtmee`)
+git clone https://github.com/snoodleboot-io/alurtmee.git
+cd alurtmee
 cargo run -p app
-
-# demo mode — sample data, no token or network needed
-ALURTMEE_DEMO=1 cargo run -p app
 ```
 
-### Using it
+## Getting connected
 
-1. Open **⚙ Settings**, paste a **fine-grained GitHub personal access token**, and click
-   **Validate**. The token is stored in your OS keychain.
-2. Pick the repositories you want to watch — your selection is persisted.
-3. Back on the feed, Alurtmee starts polling: PRs appear, get enriched and classified, and CI
-   alerts surface as you go. Pick a theme from the top-bar dropdown.
+1. Click **⚙ Settings** in the top bar.
+2. Create a GitHub **fine-grained personal access token**
+   (GitHub → *Settings → Developer settings → Personal access tokens*), give it **read** access to
+   the repositories you want to watch, paste it in, and click **Validate**. It's saved straight to
+   your system keychain.
+3. Tick the repositories you'd like to keep an eye on.
+4. That's it — head back to the feed and it fills in.
 
-| Environment variable        | Purpose                                                                 |
-|-----------------------------|-------------------------------------------------------------------------|
-| `ALURTMEE_DEMO`             | If set, pre-populate the dashboard with sample data (no token/network).  |
-| `ALURTMEE_GITHUB_BASE_URL`  | Override the GitHub REST base URL (default `https://api.github.com`).     |
-| `RUST_LOG`                  | Tracing filter (e.g. `RUST_LOG=info`).                                    |
+## Using it
 
-State lives under your platform data directory (`directories` crate): a bundled SQLite database for
-the cache/config and selection. The token is in the OS keychain only.
+- **Left pane:** your open PRs. Click one to see its full detail on the right. A small **dot** shows
+  CI status (green = passing, red = failing, gold = running), and security PRs get a **gold edge**.
+- **Filter chips** at the top of the list narrow it by source and kind.
+- **CI alerts** appear in a strip across the top, and — unless you switch them off with the
+  **Notifications** toggle — as desktop notifications.
+- **Theme picker** (top bar) switches between the five looks; your choice is remembered.
+- **Wrong tag?** On a PR's detail, click **→ feature** or **→ security** to correct its category.
+  The correction persists and is reused next time.
 
----
+## Settings & your data
 
-## Development
+- **Your token** lives only in the OS keychain (via the Secret Service). It is never written to the
+  database, config, or logs.
+- **Everything else** — the cache, your repo selection, your theme and preferences — is kept in a
+  small local database under your user data directory.
 
-```bash
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+A couple of environment variables you might use:
 
-- **Testing strategy:** pure `domain` logic is table-tested; HTTP and cross-crate behaviour is
-  verified against a local [`wiremock`](https://docs.rs/wiremock) server replaying recorded GitHub
-  payloads; the OS keychain and desktop notifications are exercised live against the session D-Bus.
-- **CI** (`.github/workflows/ci.yml`, Linux): `fmt --check`, `clippy -D warnings`, build, the full
-  test suite (under an unlocked `gnome-keyring` D-Bus session), a headless `xvfb` window smoke test,
-  and a coverage report.
-- **Conventions:** typed `thiserror` errors in libraries / `anyhow` at the binary; one type per
-  file; Conventional Commits.
+| Variable        | What it does                                                        |
+|-----------------|---------------------------------------------------------------------|
+| `ALURTMEE_DEMO` | Launch with sample data and no network (great for a first look).    |
+| `RUST_LOG`      | Turn on logging, e.g. `RUST_LOG=info`.                               |
 
----
+## Troubleshooting
 
-## Roadmap
+- **“Could not store token in keychain.”** Alurtmee needs a running Secret Service to hold your
+  token — install and start one (e.g. `gnome-keyring`), then try again.
+- **No notifications.** You need a desktop notification daemon (most desktops ship one), and the
+  **Notifications** toggle must be on.
+- **The window won't open.** Alurtmee renders with your GPU and needs a graphical session
+  (Wayland or X11).
 
-- ✅ Workspace, Linux CI, runnable window
-- ✅ Auth + scope (PAT → keychain, repo selection)
-- ✅ Conditional polling core (ETag/304, diff, adaptive cadence)
-- ✅ Enrichment (reviews, comments, check-runs)
-- ✅ Classification (human/bot, feature/security, corrections)
-- ✅ CI/CD timing + slow-CI alerts + notifications
-- ✅ Filters + dark theming (the dashboard you see today)
-- ⬜ **Live verification** against real `api.github.com` (PAT-gated)
-- ⬜ **Packaging** — Linux AppImage + `.deb` + release CI
-- ⬜ macOS / Windows backends (post-v1)
+## Contributing
 
----
-
-## Privacy & security
-
-Alurtmee reads from GitHub on your behalf and stores **only non-secret data** locally. Your access
-token is written exclusively to the **OS keychain** — it is never persisted to SQLite, written to
-config files, included in logs, or shown unmasked in the UI. Notification bodies carry no secrets.
-
----
+Bug reports and ideas are welcome via [issues](https://github.com/snoodleboot-io/alurtmee/issues).
+It's a Rust workspace — `cargo test --workspace` runs the suite.
 
 ## License
 
-Licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE).

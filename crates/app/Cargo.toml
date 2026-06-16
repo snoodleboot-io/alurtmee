@@ -17,7 +17,7 @@ domain = { path = "../domain" }
 gh-client = { path = "../gh-client" }
 store = { path = "../store" }
 poller = { path = "../poller" }
-iced = { workspace = true, features = ["tokio"] }
+iced = { workspace = true, features = ["tokio", "image"] }
 notify-rust = { workspace = true }
 directories = { workspace = true }
 tokio = { workspace = true }

@@ -31,7 +31,7 @@ use domain::{
 use gh_client::GhClient;
 use iced::theme::Palette;
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    button, checkbox, column, container, horizontal_space, image, pick_list, row, scrollable, text,
     text_input,
 };
 use iced::{Alignment, Border, Color, Element, Length, Subscription, Task, Theme};
@@ -84,19 +84,20 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color {
 
 const SKINS: [Skin; 6] = [
     Skin {
-        // Brand theme — drawn from the Alurtmee mascot: cosmic black, violet glow, cyan spark.
+        // Brand theme — pulled straight from the mascot: pure-black void, electric-violet
+        // glow (#8e00ff / #c31eff), cyan spark. High saturation to match the orb's energy.
         name: "Nebula",
-        bg: rgb(5, 3, 9),
-        surface: rgb(14, 10, 24),
-        border: rgb(40, 27, 64),
-        text: rgb(240, 236, 248),
-        muted: rgb(150, 137, 174),
-        accent: rgb(169, 87, 255),
-        accent_text: rgb(22, 8, 42),
-        gold: rgb(240, 197, 96),
-        green: rgb(95, 217, 154),
+        bg: rgb(3, 2, 8),
+        surface: rgb(13, 8, 26),
+        border: rgb(58, 28, 104),
+        text: rgb(244, 238, 252),
+        muted: rgb(159, 140, 192),
+        accent: rgb(168, 56, 255),
+        accent_text: rgb(18, 4, 38),
+        gold: rgb(242, 199, 98),
+        green: rgb(95, 222, 158),
         red: rgb(255, 93, 108),
-        slate: rgb(150, 137, 174),
+        slate: rgb(159, 140, 192),
     },
     Skin {
         name: "Aurora",
@@ -509,8 +510,8 @@ impl Alurtmee {
         .padding([5, 10]);
 
         row![
-            brand_dot(s),
-            text("Alurtmee").size(24).color(s.text),
+            brand_mark(),
+            text("Alurtmee").size(27).color(s.text),
             text(signed_in).size(13).color(s.muted),
             horizontal_space(),
             checkbox("Notifications", self.notifications_enabled)
@@ -964,21 +965,16 @@ fn rule(s: Skin) -> Element<'static, Message> {
         .into()
 }
 
-fn brand_dot(s: Skin) -> Element<'static, Message> {
-    container(horizontal_space())
-        .width(11)
-        .height(11)
-        .style(move |_t: &Theme| container::Style {
-            background: Some(s.accent.into()),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        })
+/// The Alurtmee mascot, rendered crisply from a bundled 128px PNG.
+fn brand_mark() -> Element<'static, Message> {
+    let handle = image::Handle::from_bytes(LOGO_BYTES);
+    container(image(handle).width(44).height(44))
+        .width(44)
+        .height(44)
         .into()
 }
+
+const LOGO_BYTES: &[u8] = include_bytes!("../../../assets/logo-128.png");
 
 fn dot(color: Color) -> Element<'static, Message> {
     container(horizontal_space())

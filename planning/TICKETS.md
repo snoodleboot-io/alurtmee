@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-11
+**Next free ID:** ALRT-12
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|

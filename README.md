@@ -54,16 +54,19 @@ cargo run -p app
 ## Getting connected
 
 1. Click **⚙ Settings** in the top bar.
-2. Create a GitHub **fine-grained personal access token**
-   (GitHub → *Settings → Developer settings → Personal access tokens*), give it **read** access to
-   the repositories you want to watch, paste it in, and click **Validate**. It's saved straight to
-   your system keychain.
-3. Tick the repositories you'd like to keep an eye on.
-4. That's it — head back to the feed and it fills in.
+2. Create a GitHub **personal access token**
+   (GitHub → *Settings → Developer settings → Personal access tokens*) with **read** access to the
+   repositories you want to watch. Under **GitHub tokens**, give it a short **label**, paste the
+   token, and click **Add token**. It's saved straight to your system keychain.
+3. **Add as many tokens as you need** — e.g. a personal one and a work/org one. Each is labelled and
+   stored separately; the repositories they can see are combined into one list (a repo visible to
+   more than one token appears once).
+4. Tick the repositories you'd like to keep an eye on, then head back to the feed and it fills in.
 
-You only do this once: your token stays in the system keychain and your repo selection in the local
+You only do this once: your tokens stay in the system keychain and your repo selection in the local
 database, so the next time you launch Alurtmee it reconnects and resumes polling automatically — no
-re-entry needed. (If the token is later revoked, you'll be asked to sign in again.)
+re-entry needed. Each watched repo is polled by a single token, so its PRs never show up twice. (If a
+token is later revoked, its row shows the error so you can re-add or remove it.)
 
 ## Using it
 

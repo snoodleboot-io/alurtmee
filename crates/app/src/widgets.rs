@@ -3,7 +3,7 @@
 //! These are pure presentation helpers — given a [`Skin`] they produce styled Iced elements — kept
 //! out of the application shell and the per-pane views so the look-and-feel lives in one place.
 
-use iced::widget::{button, checkbox, container, horizontal_space, image, text};
+use iced::widget::{button, checkbox, container, horizontal_space, image, text, text_input};
 use iced::{Border, Color, Element, Length, Theme};
 
 use domain::{AuthorKind, CategoryKind, TestState};
@@ -121,6 +121,22 @@ pub(crate) fn chip<'a>(
             }
         })
         .into()
+}
+
+/// Skin-colored text input: surface fill, skin border, accent-tinted selection. No grey.
+pub(crate) fn input_style(s: Skin) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
+    move |_t: &Theme, _st: text_input::Status| text_input::Style {
+        background: s.surface.into(),
+        border: Border {
+            color: s.border,
+            width: 1.0,
+            radius: RADIUS.into(),
+        },
+        icon: s.muted,
+        placeholder: s.muted,
+        value: s.text,
+        selection: tint(s.accent, 0.35),
+    }
 }
 
 /// Skin-colored checkbox: accent fill when checked, surface + border when not. No grey.

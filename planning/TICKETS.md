@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-15
+**Next free ID:** ALRT-16
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|
@@ -20,3 +20,4 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-12 | Brand logo asset + themes/UI polish (Nebula+Ionix, dual-neon, rounded skin-styled controls) | `feat/ALRT-12-logo-and-theme` | Merged |
 | ALRT-13 | SOLID Stage 1 — DIP seams: `GhApi`/`PollStore` ports, generic `Poller<C,S>`, fake-driven unit tests | `feat/ALRT-13-testability-seams` | Merged |
 | ALRT-14 | SOLID Stage 3 — split `app/main.rs` (theme registry, view/ helpers, per-pane views, update handlers) | `feat/ALRT-14-split-main` | Merged |
+| ALRT-15 | SOLID Stage 2+4 — decompose `Store` into 5 concern modules; list-driven migrations; gh-client header DRY | `feat/ALRT-15-solid-store-ocp` | Merged |

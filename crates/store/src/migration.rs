@@ -10,13 +10,17 @@ use rusqlite::Connection;
 
 use crate::error::StoreError;
 
-/// The schema version this build expects after a successful migration.
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+/// One schema step: the DDL that creates its tables, and the `user_version` it advances the
+/// database to once applied.
+struct Migration {
+    version: i64,
+    ddl: &'static str,
+}
 
-/// Bring `conn` up to [`SCHEMA_VERSION`], applying only the steps not yet present.
-///
-/// Idempotent and safe to call on every open: it reads `user_version` and applies each missing
-/// step in order, bumping `user_version` as it goes.
+/// The ordered schema steps. **Adding a step is a single append here** — `migrate` applies whichever
+/// are missing and stamps `user_version` for each, so a database from an older build upgrades in
+/// place (v0→v1→v2…) without dropping the data earlier steps wrote, and re-opening an up-to-date
+/// database is a no-op.
 ///
 /// - v1 introduces `config(key, value)`, which backs non-secret configuration (e.g. the repo
 ///   selection JSON).
@@ -31,109 +35,118 @@ pub(crate) const SCHEMA_VERSION: i64 = 5;
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        ddl: "CREATE TABLE IF NOT EXISTS config (
+                  key   TEXT PRIMARY KEY NOT NULL,
+                  value TEXT NOT NULL
+              );",
+    },
+    Migration {
+        version: 2,
+        ddl: "CREATE TABLE IF NOT EXISTS etags (
+                  endpoint      TEXT PRIMARY KEY NOT NULL,
+                  etag          TEXT,
+                  last_modified TEXT
+              );
+              CREATE TABLE IF NOT EXISTS pull_requests (
+                  repo        TEXT    NOT NULL,
+                  number      INTEGER NOT NULL,
+                  title       TEXT    NOT NULL,
+                  author      TEXT    NOT NULL,
+                  draft       INTEGER NOT NULL,
+                  updated_at  TEXT    NOT NULL,
+                  url         TEXT    NOT NULL,
+                  head_sha    TEXT    NOT NULL DEFAULT '',
+                  author_type TEXT    NOT NULL DEFAULT '',
+                  head_ref    TEXT    NOT NULL DEFAULT '',
+                  labels_json TEXT    NOT NULL DEFAULT '[]',
+                  PRIMARY KEY (repo, number)
+              );",
+    },
+    Migration {
+        version: 3,
+        ddl: "CREATE TABLE IF NOT EXISTS reviews (
+                  repo         TEXT    NOT NULL,
+                  number       INTEGER NOT NULL,
+                  idx          INTEGER NOT NULL,
+                  author       TEXT    NOT NULL,
+                  state        TEXT    NOT NULL,
+                  submitted_at TEXT    NOT NULL,
+                  PRIMARY KEY (repo, number, idx)
+              );
+              CREATE TABLE IF NOT EXISTS comments (
+                  repo       TEXT    NOT NULL,
+                  number     INTEGER NOT NULL,
+                  idx        INTEGER NOT NULL,
+                  kind       TEXT    NOT NULL,
+                  author     TEXT    NOT NULL,
+                  body       TEXT    NOT NULL,
+                  created_at TEXT    NOT NULL,
+                  PRIMARY KEY (repo, number, idx)
+              );
+              CREATE TABLE IF NOT EXISTS pr_tests (
+                  repo    TEXT    NOT NULL,
+                  number  INTEGER NOT NULL,
+                  passed  INTEGER NOT NULL,
+                  failed  INTEGER NOT NULL,
+                  pending INTEGER NOT NULL,
+                  state   TEXT    NOT NULL,
+                  PRIMARY KEY (repo, number)
+              );",
+    },
+    Migration {
+        version: 4,
+        ddl: "CREATE TABLE IF NOT EXISTS corrections (
+                  repo     TEXT    NOT NULL,
+                  number   INTEGER NOT NULL,
+                  category TEXT    NOT NULL,
+                  PRIMARY KEY (repo, number)
+              );
+              CREATE TABLE IF NOT EXISTS repo_classifier_config (
+                  repo               TEXT PRIMARY KEY NOT NULL,
+                  label_map_json     TEXT NOT NULL DEFAULT '{}',
+                  bot_overrides_json TEXT NOT NULL DEFAULT '{}'
+              );",
+    },
+    Migration {
+        version: 5,
+        ddl: "CREATE TABLE IF NOT EXISTS ci_runs (
+                  repo          TEXT    NOT NULL,
+                  run_id        INTEGER NOT NULL,
+                  workflow      TEXT    NOT NULL,
+                  conclusion    TEXT,
+                  duration_secs INTEGER NOT NULL,
+                  PRIMARY KEY (repo, run_id)
+              );",
+    },
+];
+
+/// The schema version this build expects after a successful migration — the last step's version.
+pub(crate) const SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+
+/// Bring `conn` up to [`SCHEMA_VERSION`] by applying each [`MIGRATIONS`] step whose version exceeds
+/// the database's current `user_version`, stamping the version after each. Idempotent.
 pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let mut version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-    if version < 1 {
-        // `user_version` cannot be a bound parameter, so the integer is inlined.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS config (
-                 key   TEXT PRIMARY KEY NOT NULL,
-                 value TEXT NOT NULL
-             );
-             PRAGMA user_version = 1;",
-        )?;
+    for step in MIGRATIONS {
+        if version < step.version {
+            conn.execute_batch(step.ddl)?;
+            // `user_version` cannot be a bound parameter, so the integer is inlined — it is a
+            // trusted constant from MIGRATIONS, never user input.
+            conn.execute_batch(&format!("PRAGMA user_version = {};", step.version))?;
+            version = step.version;
+        }
     }
 
-    if version < 2 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS etags (
-                 endpoint      TEXT PRIMARY KEY NOT NULL,
-                 etag          TEXT,
-                 last_modified TEXT
-             );
-             CREATE TABLE IF NOT EXISTS pull_requests (
-                 repo        TEXT    NOT NULL,
-                 number      INTEGER NOT NULL,
-                 title       TEXT    NOT NULL,
-                 author      TEXT    NOT NULL,
-                 draft       INTEGER NOT NULL,
-                 updated_at  TEXT    NOT NULL,
-                 url         TEXT    NOT NULL,
-                 head_sha    TEXT    NOT NULL DEFAULT '',
-                 author_type TEXT    NOT NULL DEFAULT '',
-                 head_ref    TEXT    NOT NULL DEFAULT '',
-                 labels_json TEXT    NOT NULL DEFAULT '[]',
-                 PRIMARY KEY (repo, number)
-             );
-             PRAGMA user_version = 2;",
-        )?;
-    }
-
-    if version < 3 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS reviews (
-                 repo         TEXT    NOT NULL,
-                 number       INTEGER NOT NULL,
-                 idx          INTEGER NOT NULL,
-                 author       TEXT    NOT NULL,
-                 state        TEXT    NOT NULL,
-                 submitted_at TEXT    NOT NULL,
-                 PRIMARY KEY (repo, number, idx)
-             );
-             CREATE TABLE IF NOT EXISTS comments (
-                 repo       TEXT    NOT NULL,
-                 number     INTEGER NOT NULL,
-                 idx        INTEGER NOT NULL,
-                 kind       TEXT    NOT NULL,
-                 author     TEXT    NOT NULL,
-                 body       TEXT    NOT NULL,
-                 created_at TEXT    NOT NULL,
-                 PRIMARY KEY (repo, number, idx)
-             );
-             CREATE TABLE IF NOT EXISTS pr_tests (
-                 repo    TEXT    NOT NULL,
-                 number  INTEGER NOT NULL,
-                 passed  INTEGER NOT NULL,
-                 failed  INTEGER NOT NULL,
-                 pending INTEGER NOT NULL,
-                 state   TEXT    NOT NULL,
-                 PRIMARY KEY (repo, number)
-             );
-             PRAGMA user_version = 3;",
-        )?;
-    }
-
-    if version < 4 {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS corrections (
-                 repo     TEXT    NOT NULL,
-                 number   INTEGER NOT NULL,
-                 category TEXT    NOT NULL,
-                 PRIMARY KEY (repo, number)
-             );
-             CREATE TABLE IF NOT EXISTS repo_classifier_config (
-                 repo               TEXT PRIMARY KEY NOT NULL,
-                 label_map_json     TEXT NOT NULL DEFAULT '{}',
-                 bot_overrides_json TEXT NOT NULL DEFAULT '{}'
-             );
-             PRAGMA user_version = 4;",
-        )?;
-    }
-
-    if version < SCHEMA_VERSION {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ci_runs (
-                 repo          TEXT    NOT NULL,
-                 run_id        INTEGER NOT NULL,
-                 workflow      TEXT    NOT NULL,
-                 conclusion    TEXT,
-                 duration_secs INTEGER NOT NULL,
-                 PRIMARY KEY (repo, run_id)
-             );
-             PRAGMA user_version = 5;",
-        )?;
-    }
+    // Invariant: a migrated database is at the latest schema version (unless it was opened by a
+    // newer build, in which case it is ahead — never behind).
+    debug_assert!(
+        version >= SCHEMA_VERSION,
+        "migrations must leave the database at or above SCHEMA_VERSION"
+    );
 
     Ok(())
 }

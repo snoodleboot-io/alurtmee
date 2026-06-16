@@ -29,7 +29,11 @@
       "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 ALURTMEE_DEMO=1 RUST_LOG=warn ./target/debug/alurtmee)",
       "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 xdg-open /tmp/alurtmee-palettes.html)",
       "Bash(echo \"COMMIT=$?\")",
-      "Bash(awk '1; /\\\\| ALRT-10 \\\\|/ {print \"| ALRT-11 | Add project README.md | `feat/ALRT-11-readme` | In Progress |\"}' planning/TICKETS.md)"
+      "Bash(awk '1; /\\\\| ALRT-10 \\\\|/ {print \"| ALRT-11 | Add project README.md | `feat/ALRT-11-readme` | In Progress |\"}' planning/TICKETS.md)",
+      "Bash(awk ' *)",
+      "Bash(awk '/^    pub async fn poll_once/,/^    \\\\}$/ {print NR\": \"$0}' /home/john_aven/Documents/software/alurtmee/crates/poller/src/poller.rs)",
+      "Bash(awk '/^    pub async fn run/,/^    \\\\}$/ {print NR\": \"$0}' /home/john_aven/Documents/software/alurtmee/crates/poller/src/poller.rs)",
+      "Bash(grep -n '\"Pull requests\"\\\\|text\\(format!\\(\"{}{}\", pr.title\\\\|pr.title, draft\\)\\\\|\\\\.size\\(20\\)\\\\|\\\\.size\\(19\\)\\\\|\\\\.size\\(15\\)' crates/app/src/main.rs)"
     ]
   }
 }

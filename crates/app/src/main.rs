@@ -29,12 +29,30 @@ use domain::{
     Org, PollCadence, PrId, PullRequest, Repo, TestState, User,
 };
 use gh_client::GhClient;
+use iced::font::{Family, Stretch, Style, Weight};
 use iced::theme::Palette;
 use iced::widget::{
     button, checkbox, column, container, horizontal_space, image, pick_list, row, scrollable, text,
     text_input,
 };
-use iced::{Alignment, Border, Color, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Border, Color, Element, Font, Length, Subscription, Task, Theme};
+
+/// One UI font family, three weights — used consistently for body, headings, titles.
+const fn ui_font(weight: Weight) -> Font {
+    Font {
+        family: Family::SansSerif,
+        weight,
+        stretch: Stretch::Normal,
+        style: Style::Normal,
+    }
+}
+const FONT_BODY: Font = ui_font(Weight::Normal);
+const FONT_MEDIUM: Font = ui_font(Weight::Medium);
+const FONT_SEMIBOLD: Font = ui_font(Weight::Semibold);
+const FONT_BOLD: Font = ui_font(Weight::Bold);
+
+/// Shared corner radius so every interactive surface matches the cards/rows.
+const RADIUS: f32 = 10.0;
 use poller::Poller;
 use store::{Keychain, Store};
 use tokio::sync::watch;
@@ -513,14 +531,15 @@ impl Alurtmee {
         };
         row![
             brand_mark(),
-            text("Alurtmee").size(32).color(s.text),
+            text("Alurtmee").size(32).color(s.text).font(FONT_BOLD),
             text(signed_in).size(13).color(s.muted),
             horizontal_space(),
             checkbox("Notifications", self.notifications_enabled)
                 .on_toggle(Message::SetNotifications)
                 .size(16)
-                .text_size(13),
-            ghost_button("⚙ Settings", Message::ShowSettings(!self.show_settings)),
+                .text_size(13)
+                .style(checkbox_style(s)),
+            ghost_button(s, "⚙ Settings", Message::ShowSettings(!self.show_settings)),
         ]
         .spacing(12)
         .align_y(Alignment::Center)
@@ -587,7 +606,10 @@ impl Alurtmee {
 
         column![
             row![
-                text("Pull requests").size(16).color(s.text),
+                text("Pull requests")
+                    .size(16)
+                    .color(s.text)
+                    .font(FONT_SEMIBOLD),
                 horizontal_space(),
                 text(count).size(13).color(s.muted)
             ]
@@ -732,8 +754,9 @@ impl Alurtmee {
         let draft = if pr.draft { "  · draft" } else { "" };
         let mut detail = column![
             text(format!("{}{}", pr.title, draft))
-                .size(20)
-                .color(s.text),
+                .size(21)
+                .color(s.text)
+                .font(FONT_SEMIBOLD),
             text(format!(
                 "{}#{}  ·  @{}",
                 pr.id.repo, pr.id.number, pr.author
@@ -756,10 +779,12 @@ impl Alurtmee {
                         .color(s.muted),
                     horizontal_space(),
                     ghost_button(
+                        s,
                         "→ feature",
                         Message::CorrectCategory(pr.id.clone(), CategoryKind::Feature)
                     ),
                     ghost_button(
+                        s,
                         "→ security",
                         Message::CorrectCategory(pr.id.clone(), CategoryKind::Security)
                     ),
@@ -848,16 +873,11 @@ impl Alurtmee {
             AuthState::Unauthenticated => "Not signed in".to_string(),
         };
 
-        let validate = {
-            let b = button(text("Validate"))
-                .padding([8, 16])
-                .style(button::primary);
-            if self.model.is_busy() {
-                b
-            } else {
-                b.on_press(Message::ValidatePressed)
-            }
-        };
+        let validate = primary_button(
+            s,
+            "Validate",
+            (!self.model.is_busy()).then_some(Message::ValidatePressed),
+        );
 
         let names: Vec<String> = SKINS.iter().map(|sk| sk.name.to_string()).collect();
         let theme_picker = pick_list(
@@ -866,13 +886,55 @@ impl Alurtmee {
             Message::SelectSkin,
         )
         .text_size(13)
-        .padding([6, 12]);
+        .padding([7, 12])
+        .style(move |_t: &Theme, st| {
+            let hover = matches!(st, pick_list::Status::Hovered | pick_list::Status::Opened);
+            pick_list::Style {
+                text_color: s.text,
+                placeholder_color: s.muted,
+                handle_color: s.accent,
+                background: s.surface.into(),
+                border: Border {
+                    color: if hover { s.accent } else { s.border },
+                    width: 1.0,
+                    radius: RADIUS.into(),
+                },
+            }
+        })
+        .menu_style(move |_t: &Theme| iced::widget::overlay::menu::Style {
+            background: s.surface.into(),
+            border: Border {
+                color: s.border,
+                width: 1.0,
+                radius: RADIUS.into(),
+            },
+            text_color: s.text,
+            selected_text_color: s.accent_text,
+            selected_background: s.accent.into(),
+        });
+
+        let token_input = text_input("ghp_…", self.model.pat_input())
+            .on_input(Message::PatInputChanged)
+            .secure(true)
+            .padding(11)
+            .style(move |_t: &Theme, _st| text_input::Style {
+                background: s.surface.into(),
+                border: Border {
+                    color: s.border,
+                    width: 1.0,
+                    radius: RADIUS.into(),
+                },
+                icon: s.muted,
+                placeholder: s.muted,
+                value: s.text,
+                selection: tint(s.accent, 0.35),
+            });
 
         let mut panel = column![
-            text("Settings").size(20).color(s.text),
+            text("Settings").size(22).color(s.text).font(FONT_BOLD),
             text(identity).size(14).color(s.muted),
             rule(s),
-            text("Theme").size(15).color(s.text),
+            text("Theme").size(15).color(s.text).font(FONT_SEMIBOLD),
             row![
                 theme_picker,
                 text("Pick a look — your choice is remembered.")
@@ -882,11 +944,11 @@ impl Alurtmee {
             .spacing(12)
             .align_y(Alignment::Center),
             rule(s),
-            text("GitHub personal access token").size(13).color(s.text),
-            text_input("ghp_…", self.model.pat_input())
-                .on_input(Message::PatInputChanged)
-                .secure(true)
-                .padding(10),
+            text("GitHub personal access token")
+                .size(13)
+                .color(s.text)
+                .font(FONT_SEMIBOLD),
+            token_input,
             validate,
             text(self.model.status().to_string())
                 .size(13)
@@ -911,7 +973,8 @@ impl Alurtmee {
                     self.model.selection().len()
                 ))
                 .size(15)
-                .color(s.text),
+                .color(s.text)
+                .font(FONT_SEMIBOLD),
             );
             let repos: Vec<Element<Message>> = self
                 .model
@@ -927,6 +990,7 @@ impl Alurtmee {
                     };
                     checkbox(label, checked)
                         .on_toggle(move |_| Message::ToggleRepo(full_name.clone()))
+                        .style(checkbox_style(s))
                         .into()
                 })
                 .collect();
@@ -934,7 +998,11 @@ impl Alurtmee {
         }
 
         if self.has_feed() {
-            panel = panel.push(ghost_button("← Back to feed", Message::ShowSettings(false)));
+            panel = panel.push(ghost_button(
+                s,
+                "← Back to feed",
+                Message::ShowSettings(false),
+            ));
         }
 
         row![
@@ -1066,12 +1134,76 @@ fn chip<'a>(s: Skin, label: &'a str, active: bool, msg: Message) -> Element<'a, 
         .into()
 }
 
-fn ghost_button(label: &str, msg: Message) -> Element<'static, Message> {
-    button(text(label.to_string()).size(13))
-        .padding([5, 10])
+/// Skin-colored checkbox: accent fill when checked, surface + border when not. No grey.
+fn checkbox_style(s: Skin) -> impl Fn(&Theme, checkbox::Status) -> checkbox::Style {
+    move |_t: &Theme, status: checkbox::Status| {
+        let checked = matches!(
+            status,
+            checkbox::Status::Active { is_checked: true }
+                | checkbox::Status::Hovered { is_checked: true }
+        );
+        checkbox::Style {
+            background: if checked { s.accent } else { s.surface }.into(),
+            icon_color: s.accent_text,
+            border: Border {
+                color: if checked { s.accent } else { s.border },
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            text_color: Some(s.text),
+        }
+    }
+}
+
+/// A quiet, rounded, skin-colored button — surface fill, accent on hover. No grey.
+fn ghost_button(s: Skin, label: &str, msg: Message) -> Element<'static, Message> {
+    button(text(label.to_string()).size(13).font(FONT_MEDIUM))
+        .padding([6, 12])
         .on_press(msg)
-        .style(button::secondary)
+        .style(move |_t: &Theme, st: button::Status| {
+            let hover = matches!(st, button::Status::Hovered);
+            button::Style {
+                background: Some(mix(s.accent, s.surface, if hover { 0.18 } else { 0.0 }).into()),
+                text_color: if hover { s.text } else { s.muted },
+                border: Border {
+                    color: if hover { s.accent } else { s.border },
+                    width: 1.0,
+                    radius: RADIUS.into(),
+                },
+                ..Default::default()
+            }
+        })
         .into()
+}
+
+/// A filled, rounded accent button for the primary action in a view.
+fn primary_button(s: Skin, label: &str, msg: Option<Message>) -> Element<'static, Message> {
+    let mut b = button(text(label.to_string()).size(14).font(FONT_SEMIBOLD))
+        .padding([9, 18])
+        .style(move |_t: &Theme, st: button::Status| {
+            let hover = matches!(st, button::Status::Hovered);
+            button::Style {
+                background: Some(
+                    if hover {
+                        mix(s.text, s.accent, 0.12)
+                    } else {
+                        s.accent
+                    }
+                    .into(),
+                ),
+                text_color: s.accent_text,
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: RADIUS.into(),
+                },
+                ..Default::default()
+            }
+        });
+    if let Some(m) = msg {
+        b = b.on_press(m);
+    }
+    b.into()
 }
 
 /// Linear blend: `a` mixed into `b` by `t` (0 = all b, 1 = all a).
@@ -1176,5 +1308,6 @@ fn main() -> iced::Result {
     iced::application("Alurtmee", Alurtmee::update, Alurtmee::view)
         .subscription(Alurtmee::subscription)
         .theme(Alurtmee::theme)
+        .default_font(FONT_BODY)
         .run_with(Alurtmee::boot)
 }

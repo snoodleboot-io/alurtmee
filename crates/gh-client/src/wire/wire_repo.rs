@@ -21,6 +21,7 @@ impl From<WireRepo> for domain::Repo {
             name: w.name,
             full_name: w.full_name,
             private: w.private,
+            owner_is_org: w.owner.kind == "Organization",
         }
     }
 }
@@ -44,5 +45,22 @@ mod tests {
         assert_eq!(repo.owner, "octocat");
         assert_eq!(repo.full_name, "octocat/hello");
         assert!(repo.private);
+        assert!(!repo.owner_is_org, "User-owned repo is not an org repo");
+    }
+
+    #[test]
+    fn wire_repo_marks_organization_owner() {
+        let json = r#"{
+            "id":7,
+            "name":"api",
+            "full_name":"acme/api",
+            "private":true,
+            "owner":{"login":"acme","id":9,"type":"Organization"}
+        }"#;
+        let repo: domain::Repo = serde_json::from_str::<WireRepo>(json).unwrap().into();
+        assert!(
+            repo.owner_is_org,
+            "Organization owner is detected from `type`"
+        );
     }
 }

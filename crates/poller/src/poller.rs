@@ -83,21 +83,24 @@ impl<C: GhApi + Send, S: PollStore + Send> Poller<C, S> {
                 outcome.rate_limit = result.rate_limit;
             }
 
-            // Persist the refreshed ETag (the client carries the prior one forward on a 304).
-            if result.etag.is_some() {
-                self.store.set_etag(
-                    &endpoint,
-                    &EtagRecord {
-                        etag: result.etag.clone(),
-                        last_modified: None,
-                    },
-                )?;
-            }
+            let response_etag = result.etag.clone();
 
             if let PrOutcome::Modified(fresh) = result.outcome {
                 let cached = self.store.load_repo_prs(repo)?;
                 let diff = diff_pull_requests(&cached, &fresh);
                 self.store.cache_repo_prs(repo, &fresh)?;
+                // Persist the ETag *only after* the cache write succeeds. If caching fails, the prior
+                // ETag stays put so the next poll refetches in full rather than 304-ing against a
+                // cache that was never written (the bug that wedged early databases).
+                if response_etag.is_some() {
+                    self.store.set_etag(
+                        &endpoint,
+                        &EtagRecord {
+                            etag: response_etag.clone(),
+                            last_modified: None,
+                        },
+                    )?;
+                }
                 if !diff.is_empty() {
                     outcome.changed = true;
                 }
@@ -121,6 +124,16 @@ impl<C: GhApi + Send, S: PollStore + Send> Poller<C, S> {
 
                 outcome.events.extend(diff);
                 outcome.events.extend(derived);
+            } else if response_etag.is_some() {
+                // NotModified (304): the cached snapshot is already current, so it is safe to keep
+                // the ETag fresh for the next conditional request.
+                self.store.set_etag(
+                    &endpoint,
+                    &EtagRecord {
+                        etag: response_etag,
+                        last_modified: None,
+                    },
+                )?;
             }
 
             // CI-timing tier: surface slow / failed Actions runs. Best-effort — a failure here

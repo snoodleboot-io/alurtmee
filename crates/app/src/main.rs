@@ -82,6 +82,10 @@ enum Message {
     /// Result of validating + listing repos for the token labelled `String`.
     PatValidated(String, Result<(User, Vec<Repo>), String>),
     RemovePat(String),
+    BeginRename(String),
+    RenameInputChanged(String),
+    CommitRename,
+    CancelRename,
     ToggleRepo(String),
     PollEvent(ChangeEvent),
     CorrectCategory(PrId, CategoryKind),
@@ -233,6 +237,29 @@ impl Alurtmee {
                 let _ = self.keychain.delete_token(&label);
                 self.model.remove_pat(&label);
                 persist_pats(&self.store, &self.model);
+                Task::none()
+            }
+            Message::BeginRename(label) => {
+                self.model.begin_rename(&label);
+                Task::none()
+            }
+            Message::RenameInputChanged(value) => {
+                self.model.rename_input_changed(value);
+                Task::none()
+            }
+            Message::CancelRename => {
+                self.model.cancel_rename();
+                Task::none()
+            }
+            Message::CommitRename => {
+                if let Some((old, new)) = self.model.commit_rename() {
+                    // Move the secret to the new keychain account, then drop the old one.
+                    if let Ok(Some(token)) = self.keychain.get_token(&old) {
+                        let _ = self.keychain.set_token(&new, &token);
+                        let _ = self.keychain.delete_token(&old);
+                    }
+                    persist_pats(&self.store, &self.model);
+                }
                 Task::none()
             }
             Message::ToggleRepo(full_name) => {

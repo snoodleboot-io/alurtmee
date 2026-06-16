@@ -462,26 +462,46 @@ impl Alurtmee {
         ]
         .spacing(10);
 
-        // Configured tokens, each with its identity and a remove button.
+        // Configured tokens. The one being renamed shows an inline edit field; the rest show their
+        // identity with rename/remove buttons.
         for pat in self.model.pats() {
-            let who = match &pat.login {
-                Some(login) => format!("@{login}  ·  {} repos", pat.repos.len()),
-                None => "validating…".to_string(),
-            };
             let label = pat.label.clone();
-            panel = panel.push(
-                row![
-                    text(pat.label.clone())
-                        .size(13)
-                        .color(s.text)
-                        .font(FONT_MEDIUM),
-                    text(who).size(12).color(s.muted),
-                    horizontal_space(),
-                    ghost_button(s, "remove", Message::RemovePat(label)),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            );
+            if self.model.editing_label() == Some(pat.label.as_str()) {
+                let edit_field = text_input("new label", self.model.edit_input())
+                    .on_input(Message::RenameInputChanged)
+                    .on_submit(Message::CommitRename)
+                    .padding(8)
+                    .width(Length::Fixed(170.0))
+                    .style(input_style(s));
+                panel = panel.push(
+                    row![
+                        edit_field,
+                        primary_button(s, "save", Some(Message::CommitRename)),
+                        ghost_button(s, "cancel", Message::CancelRename),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            } else {
+                let who = match &pat.login {
+                    Some(login) => format!("@{login}  ·  {} repos", pat.repos.len()),
+                    None => "validating…".to_string(),
+                };
+                panel = panel.push(
+                    row![
+                        text(pat.label.clone())
+                            .size(13)
+                            .color(s.text)
+                            .font(FONT_MEDIUM),
+                        text(who).size(12).color(s.muted),
+                        horizontal_space(),
+                        ghost_button(s, "rename", Message::BeginRename(label.clone())),
+                        ghost_button(s, "remove", Message::RemovePat(label)),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                );
+            }
         }
 
         // Add-a-token row: label + PAT + Add.

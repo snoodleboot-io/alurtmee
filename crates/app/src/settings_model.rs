@@ -44,6 +44,10 @@ pub struct SettingsModel {
     status: String,
     /// Whether a validation or listing request is currently in flight.
     busy: bool,
+    /// The label of the token currently being renamed, if any.
+    editing_label: Option<String>,
+    /// Transient text of the in-progress rename.
+    edit_input: String,
 }
 
 impl std::fmt::Debug for SettingsModel {
@@ -56,6 +60,8 @@ impl std::fmt::Debug for SettingsModel {
             .field("selection", &self.selection)
             .field("status", &self.status)
             .field("busy", &self.busy)
+            .field("editing_label", &self.editing_label)
+            .field("edit_input", &self.edit_input)
             .finish()
     }
 }
@@ -127,27 +133,35 @@ impl SettingsModel {
     /// `(label, repo_full_names)` groups, so the caller spawns one poller per token over a disjoint
     /// repo set and a repo's PRs are never fetched twice.
     ///
-    /// **Ownership rule — org access trumps personal.** A token whose own account owns the repo
-    /// (`login == repo owner`) holds it *personally*; any other token reaches it through an
-    /// organization / collaborator relationship. When several tokens can see a repo, an org token
-    /// wins over a personal one (the org token is the authoritative, fuller-access view); ties break
-    /// on configured order.
+    /// **Ownership rule — org access trumps personal.** A token holds a repo *personally* only when
+    /// the repo is a personal (non-org) account's repo owned by that token's own login
+    /// (`!owner_is_org && repo.owner == token.login`) — using GitHub's authoritative owner `type`
+    /// rather than guessing. Any other token reaches it through an organization / collaborator
+    /// relationship. When several tokens can see a repo, an org token wins over a personal one (the
+    /// org token is the authoritative, fuller-access view); ties break on configured order.
     pub fn poll_assignments(&self) -> Vec<(String, Vec<String>)> {
         let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for full_name in self.selection.iter() {
-            let owner = full_name.split('/').next().unwrap_or("");
-            let candidates: Vec<&PatEntry> = self
+            // Tokens that can see this repo, paired with the repo record each one returned.
+            let candidates: Vec<(&PatEntry, &Repo)> = self
                 .pats
                 .iter()
-                .filter(|p| p.repos.iter().any(|r| r.full_name == *full_name))
+                .filter_map(|p| {
+                    p.repos
+                        .iter()
+                        .find(|r| r.full_name == *full_name)
+                        .map(|r| (p, r))
+                })
                 .collect();
-            // Prefer the first token that accesses the repo via an org/collaborator relationship
-            // (its login is not the repo owner); fall back to the first token that can see it.
+            let personally_owns = |(pat, repo): &(&PatEntry, &Repo)| {
+                !repo.owner_is_org && pat.login.as_deref() == Some(repo.owner.as_str())
+            };
+            // Prefer the first token with org/collaborator access; fall back to the first candidate.
             let chosen = candidates
                 .iter()
-                .find(|p| p.login.as_deref() != Some(owner))
+                .find(|c| !personally_owns(c))
                 .or_else(|| candidates.first());
-            if let Some(pat) = chosen {
+            if let Some((pat, _)) = chosen {
                 groups
                     .entry(pat.label.clone())
                     .or_default()
@@ -262,6 +276,62 @@ impl SettingsModel {
         removed
     }
 
+    // --- token rename ---
+
+    /// The label currently being renamed, if any (so the view can show its edit field).
+    pub fn editing_label(&self) -> Option<&str> {
+        self.editing_label.as_deref()
+    }
+
+    /// The in-progress rename text.
+    pub fn edit_input(&self) -> &str {
+        &self.edit_input
+    }
+
+    /// Enter rename mode for `label`, pre-filling the edit box with the current label.
+    pub fn begin_rename(&mut self, label: &str) {
+        self.editing_label = Some(label.to_string());
+        self.edit_input = label.to_string();
+    }
+
+    /// Record a change to the rename text.
+    pub fn rename_input_changed(&mut self, value: String) {
+        self.edit_input = value;
+    }
+
+    /// Leave rename mode without applying.
+    pub fn cancel_rename(&mut self) {
+        self.editing_label = None;
+        self.edit_input.clear();
+    }
+
+    /// Apply the in-progress rename. Returns `(old_label, new_label)` for the caller to move the
+    /// keychain entry and persist, or `None` if there is nothing to do (blank, unchanged, or a
+    /// collision — a status message is set in the collision/blank cases).
+    pub fn commit_rename(&mut self) -> Option<(String, String)> {
+        let old = self.editing_label.clone()?;
+        let new = self.edit_input.trim().to_string();
+        if new.is_empty() {
+            self.status = "Label can't be empty.".to_string();
+            return None;
+        }
+        if new == old {
+            self.cancel_rename();
+            return None;
+        }
+        if self.pats.iter().any(|p| p.label == new) {
+            self.status = format!("A token labelled “{new}” already exists.");
+            return None;
+        }
+        if let Some(entry) = self.pats.iter_mut().find(|p| p.label == old) {
+            entry.label = new.clone();
+        }
+        self.editing_label = None;
+        self.edit_input.clear();
+        self.status = format!("Renamed “{old}” to “{new}”.");
+        Some((old, new))
+    }
+
     /// Toggle a repository in/out of the selection. Returns the new selection so the caller can
     /// persist it. Slugs are `owner/name`.
     pub fn toggle_repo(&mut self, full_name: &str) -> &RepoSelection {
@@ -282,12 +352,21 @@ mod tests {
     }
 
     fn repo(owner: &str, name: &str) -> Repo {
+        repo_owned(owner, name, false)
+    }
+
+    fn org_repo(owner: &str, name: &str) -> Repo {
+        repo_owned(owner, name, true)
+    }
+
+    fn repo_owned(owner: &str, name: &str, owner_is_org: bool) -> Repo {
         Repo {
             id: 1,
             owner: owner.to_string(),
             name: name.to_string(),
             full_name: format!("{owner}/{name}"),
             private: false,
+            owner_is_org,
         }
     }
 
@@ -430,6 +509,34 @@ mod tests {
     }
 
     #[test]
+    fn org_owned_repo_is_never_personal_even_if_login_matches_owner() {
+        // An org-owned repo whose owner login coincides with a token's login must still count as
+        // org access (owner type, not the login string, decides) — so this token is not demoted.
+        let mut model = SettingsModel::new();
+        model.pat_validated(
+            "matchy".to_string(),
+            user("acme"),
+            vec![org_repo("acme", "api")],
+        );
+        model.pat_validated(
+            "other".to_string(),
+            user("bob"),
+            vec![org_repo("acme", "api")],
+        );
+        model.toggle_repo("acme/api");
+
+        let assignments: BTreeMap<String, Vec<String>> =
+            model.poll_assignments().into_iter().collect();
+        // Both are org access; the first ("matchy") wins on order rather than being skipped as
+        // "personal" just because its login equals the org's login.
+        assert_eq!(
+            assignments.get("matchy"),
+            Some(&vec!["acme/api".to_string()])
+        );
+        assert_eq!(assignments.get("other"), None);
+    }
+
+    #[test]
     fn remove_pat_drops_the_entry_and_its_repos() {
         let mut model = SettingsModel::new();
         model.pat_validated("a".to_string(), user("a"), vec![repo("org", "api")]);
@@ -442,6 +549,48 @@ mod tests {
             !model.remove_pat("a"),
             "removing an absent label is a no-op"
         );
+    }
+
+    #[test]
+    fn rename_renames_the_entry_and_returns_the_pair() {
+        let mut model = SettingsModel::new();
+        model.pat_validated("old".to_string(), user("octocat"), vec![repo("org", "api")]);
+        model.begin_rename("old");
+        assert_eq!(model.editing_label(), Some("old"));
+        assert_eq!(model.edit_input(), "old");
+        model.rename_input_changed("  work  ".to_string());
+
+        assert_eq!(
+            model.commit_rename(),
+            Some(("old".to_string(), "work".to_string())),
+            "trimmed (old, new) is returned for the keychain move"
+        );
+        assert_eq!(model.pats()[0].label, "work");
+        assert_eq!(model.editing_label(), None, "rename mode exited");
+    }
+
+    #[test]
+    fn rename_rejects_blank_and_duplicate_and_noops_unchanged() {
+        let mut model = SettingsModel::new();
+        model.pat_validated("a".to_string(), user("a"), vec![]);
+        model.pat_validated("b".to_string(), user("b"), vec![]);
+
+        // Blank → rejected, stays in edit mode.
+        model.begin_rename("a");
+        model.rename_input_changed("   ".to_string());
+        assert_eq!(model.commit_rename(), None);
+        assert_eq!(model.editing_label(), Some("a"));
+
+        // Duplicate → rejected.
+        model.rename_input_changed("b".to_string());
+        assert_eq!(model.commit_rename(), None);
+        assert!(model.status().contains("already exists"));
+        assert_eq!(model.pats()[0].label, "a", "no rename happened");
+
+        // Unchanged → no-op, exits edit mode.
+        model.rename_input_changed("a".to_string());
+        assert_eq!(model.commit_rename(), None);
+        assert_eq!(model.editing_label(), None);
     }
 
     #[test]

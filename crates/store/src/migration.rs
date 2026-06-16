@@ -10,11 +10,18 @@ use rusqlite::Connection;
 
 use crate::error::StoreError;
 
-/// One schema step: the DDL that creates its tables, and the `user_version` it advances the
-/// database to once applied.
+/// How a migration step is applied: either a batch of DDL, or Rust code for steps that need
+/// conditional logic (e.g. adding a column only if an older, in-place-edited migration omitted it,
+/// which plain `ALTER TABLE` cannot express idempotently).
+enum Step {
+    Sql(&'static str),
+    Run(fn(&Connection) -> Result<(), StoreError>),
+}
+
+/// One schema step: how to apply it, and the `user_version` it advances the database to once done.
 struct Migration {
     version: i64,
-    ddl: &'static str,
+    apply: Step,
 }
 
 /// The ordered schema steps. **Adding a step is a single append here** — `migrate` applies whichever
@@ -32,20 +39,28 @@ struct Migration {
 ///   (the per-repo label map and bot overrides backing the feature-vs-security classifier, AD-5).
 /// - v5 introduces `ci_runs` (recorded workflow-run outcomes per repo, keyed by `(repo, run_id)`),
 ///   backing recent-duration lookups for completed runs.
+/// - v6 backfills the `pull_requests` columns (`head_sha`, `author_type`, `head_ref`, `labels_json`)
+///   that early databases lack, repairing a schema that an in-place edit to the v2 step had left
+///   inconsistent. A no-op on databases that already have them.
+/// - v7 clears the `etags` cache so a database wedged by the v6-era inconsistency (recorded ETags
+///   but empty PR cache → permanent 304s) refetches once and recovers.
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
-        ddl: "CREATE TABLE IF NOT EXISTS config (
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS config (
                   key   TEXT PRIMARY KEY NOT NULL,
                   value TEXT NOT NULL
               );",
+        ),
     },
     Migration {
         version: 2,
-        ddl: "CREATE TABLE IF NOT EXISTS etags (
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS etags (
                   endpoint      TEXT PRIMARY KEY NOT NULL,
                   etag          TEXT,
                   last_modified TEXT
@@ -64,10 +79,12 @@ const MIGRATIONS: &[Migration] = &[
                   labels_json TEXT    NOT NULL DEFAULT '[]',
                   PRIMARY KEY (repo, number)
               );",
+        ),
     },
     Migration {
         version: 3,
-        ddl: "CREATE TABLE IF NOT EXISTS reviews (
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS reviews (
                   repo         TEXT    NOT NULL,
                   number       INTEGER NOT NULL,
                   idx          INTEGER NOT NULL,
@@ -95,10 +112,12 @@ const MIGRATIONS: &[Migration] = &[
                   state   TEXT    NOT NULL,
                   PRIMARY KEY (repo, number)
               );",
+        ),
     },
     Migration {
         version: 4,
-        ddl: "CREATE TABLE IF NOT EXISTS corrections (
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS corrections (
                   repo     TEXT    NOT NULL,
                   number   INTEGER NOT NULL,
                   category TEXT    NOT NULL,
@@ -109,10 +128,12 @@ const MIGRATIONS: &[Migration] = &[
                   label_map_json     TEXT NOT NULL DEFAULT '{}',
                   bot_overrides_json TEXT NOT NULL DEFAULT '{}'
               );",
+        ),
     },
     Migration {
         version: 5,
-        ddl: "CREATE TABLE IF NOT EXISTS ci_runs (
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS ci_runs (
                   repo          TEXT    NOT NULL,
                   run_id        INTEGER NOT NULL,
                   workflow      TEXT    NOT NULL,
@@ -120,8 +141,77 @@ const MIGRATIONS: &[Migration] = &[
                   duration_secs INTEGER NOT NULL,
                   PRIMARY KEY (repo, run_id)
               );",
+        ),
+    },
+    Migration {
+        version: 6,
+        // v6 backfills `pull_requests` columns (head_sha, author_type, head_ref, labels_json) onto
+        // databases created before they existed. Early builds shipped a v2 `pull_requests` without
+        // them; the columns were later added by editing the v2 DDL, so a database that had already
+        // passed v2 never received them and every `load_repo_prs` failed. This step adds whichever
+        // are missing — a no-op on fresh databases that already have them.
+        apply: Step::Run(backfill_pull_request_columns),
+    },
+    Migration {
+        version: 7,
+        // Clear stale conditional-request validators. A database repaired by v6 had been failing to
+        // cache PRs while still recording ETags, so every repo now 304s ("nothing changed") yet the
+        // cache is empty — permanently wedged. Dropping the ETags forces one full refetch that
+        // re-populates the cache. Harmless on a healthy database (it just refetches once).
+        apply: Step::Run(clear_stale_etags),
     },
 ];
+
+/// Empty the `etags` cache (if the table exists) so a wedged database refetches once and recovers.
+fn clear_stale_etags(conn: &Connection) -> Result<(), StoreError> {
+    let has_table: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'etags'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_table > 0 {
+        conn.execute_batch("DELETE FROM etags;")?;
+    }
+    Ok(())
+}
+
+/// Add any `pull_requests` columns the current schema expects but an older database lacks.
+fn backfill_pull_request_columns(conn: &Connection) -> Result<(), StoreError> {
+    let existing: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(pull_requests)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+
+    // An empty column set means the table does not exist (PRAGMA table_info yields no rows for a
+    // missing table). There is nothing to backfill — v2 will have created it for any real database.
+    if existing.is_empty() {
+        return Ok(());
+    }
+
+    for (column, ddl) in [
+        (
+            "head_sha",
+            "ALTER TABLE pull_requests ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "author_type",
+            "ALTER TABLE pull_requests ADD COLUMN author_type TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "head_ref",
+            "ALTER TABLE pull_requests ADD COLUMN head_ref TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "labels_json",
+            "ALTER TABLE pull_requests ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'",
+        ),
+    ] {
+        if !existing.contains(column) {
+            conn.execute_batch(ddl)?;
+        }
+    }
+    Ok(())
+}
 
 /// The schema version this build expects after a successful migration — the last step's version.
 pub(crate) const SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].version;
@@ -133,7 +223,10 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), StoreError> {
 
     for step in MIGRATIONS {
         if version < step.version {
-            conn.execute_batch(step.ddl)?;
+            match step.apply {
+                Step::Sql(ddl) => conn.execute_batch(ddl)?,
+                Step::Run(run) => run(conn)?,
+            }
             // `user_version` cannot be a bound parameter, so the integer is inlined — it is a
             // trusted constant from MIGRATIONS, never user input.
             conn.execute_batch(&format!("PRAGMA user_version = {};", step.version))?;
@@ -186,7 +279,7 @@ mod tests {
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
         assert!(table_exists(&conn, "ci_runs"));
-        assert_eq!(user_version(&conn), 5);
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
     }
 
     #[test]
@@ -196,7 +289,7 @@ mod tests {
         migrate(&conn).expect("second migrate");
         migrate(&conn).expect("third migrate");
 
-        assert_eq!(user_version(&conn), 5);
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
         assert!(table_exists(&conn, "config"));
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
@@ -232,7 +325,7 @@ mod tests {
         migrate(&conn).expect("upgrade v1 -> current");
 
         // Version advanced and the new tables landed.
-        assert_eq!(user_version(&conn), 5);
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
         assert!(table_exists(&conn, "etags"));
         assert!(table_exists(&conn, "pull_requests"));
         assert!(table_exists(&conn, "reviews"));
@@ -339,7 +432,7 @@ mod tests {
         migrate(&conn).expect("upgrade v3 -> current");
 
         // Version advanced to current and the two v4 classifier-config tables landed.
-        assert_eq!(user_version(&conn), 5);
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
         assert!(table_exists(&conn, "corrections"));
         assert!(table_exists(&conn, "repo_classifier_config"));
 
@@ -381,7 +474,7 @@ mod tests {
         migrate(&conn).expect("upgrade v4 -> v5");
 
         // Version advanced and the v5 ci_runs table landed.
-        assert_eq!(user_version(&conn), 5);
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
         assert!(table_exists(&conn, "ci_runs"));
 
         // The pre-existing v4 corrections row survived — the upgrade is non-destructive.
@@ -393,5 +486,66 @@ mod tests {
             )
             .expect("v4 corrections row survives");
         assert_eq!(category, "\"feature\"");
+    }
+
+    fn columns(conn: &Connection, table: &str) -> Vec<String> {
+        conn.prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn v6_backfills_missing_pull_request_columns_on_a_legacy_db() {
+        // Reproduce a database written by an early build: pull_requests has only its original 7
+        // columns and user_version is pinned at 5 (the columns added by a later in-place edit to the
+        // v2 DDL were never applied, since v2 had already run).
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch(
+            "CREATE TABLE pull_requests (
+                 repo       TEXT    NOT NULL,
+                 number     INTEGER NOT NULL,
+                 title      TEXT    NOT NULL,
+                 author     TEXT    NOT NULL,
+                 draft      INTEGER NOT NULL,
+                 updated_at TEXT    NOT NULL,
+                 url        TEXT    NOT NULL,
+                 PRIMARY KEY (repo, number)
+             );
+             INSERT INTO pull_requests (repo, number, title, author, draft, updated_at, url)
+             VALUES ('octocat/hello', 7, 'A PR', 'octocat', 0, 't', 'u');
+             PRAGMA user_version = 5;",
+        )
+        .expect("seed legacy v5 schema");
+        assert!(!columns(&conn, "pull_requests").contains(&"head_sha".to_string()));
+
+        migrate(&conn).expect("upgrade v5 -> v6 backfill");
+
+        let cols = columns(&conn, "pull_requests");
+        for added in ["head_sha", "author_type", "head_ref", "labels_json"] {
+            assert!(cols.contains(&added.to_string()), "v6 adds {added}");
+        }
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        // The added columns took their defaults; the pre-existing row survived non-destructively.
+        let (sha, labels): (String, String) = conn
+            .query_row(
+                "SELECT head_sha, labels_json FROM pull_requests WHERE number = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("legacy row survives with defaulted columns");
+        assert_eq!((sha.as_str(), labels.as_str()), ("", "[]"));
+    }
+
+    #[test]
+    fn v6_is_a_noop_on_a_fresh_database() {
+        // A database created by the current build already has the columns; v6 must not error.
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        migrate(&conn).expect("fresh migrate");
+        migrate(&conn).expect("re-migrate is idempotent");
+        let cols = columns(&conn, "pull_requests");
+        assert!(cols.contains(&"head_sha".to_string()));
     }
 }

@@ -35,7 +35,11 @@
       "Bash(awk '/^    pub async fn run/,/^    \\\\}$/ {print NR\": \"$0}' /home/john_aven/Documents/software/alurtmee/crates/poller/src/poller.rs)",
       "Bash(grep -n '\"Pull requests\"\\\\|text\\(format!\\(\"{}{}\", pr.title\\\\|pr.title, draft\\)\\\\|\\\\.size\\(20\\)\\\\|\\\\.size\\(19\\)\\\\|\\\\.size\\(15\\)' crates/app/src/main.rs)",
       "Bash(grep -A3 \"cannot find type \\\\`Color\\\\`\")",
-      "Bash(bash scripts/smoke_window.sh)"
+      "Bash(bash scripts/smoke_window.sh)",
+      "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 RUST_LOG=warn ./target/debug/alurtmee)",
+      "Bash(echo \"ok-suites: $\\(cargo test --workspace 2>&1)",
+      "Bash(python3 -c ' *)",
+      "Bash(awk '1; /\\\\| ALRT-18 \\\\|/ {print \"| ALRT-19 | Fix wedged polling \\(v6 backfill + v7 etag reset, etag-after-cache\\), capture repo owner type, rename tokens | `feat/ALRT-19-token-rename-owner-type` | In Review |\"}' planning/TICKETS.md)"
     ]
   }
 }

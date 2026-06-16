@@ -530,7 +530,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, migration::SCHEMA_VERSION);
     }
 
     #[test]
@@ -770,7 +770,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, migration::SCHEMA_VERSION);
     }
 
     #[test]

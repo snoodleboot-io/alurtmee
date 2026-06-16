@@ -1,6 +1,10 @@
-# Alurtmee
+<p align="center">
+  <img src="assets/logo.png" alt="Alurtmee" width="140">
+</p>
 
-A calm desktop app for keeping an eye on your GitHub pull requests.
+<h1 align="center">Alurtmee</h1>
+
+<p align="center"><em>A calm desktop app for keeping an eye on your GitHub pull requests.</em></p>
 
 Point it at the repositories you care about and Alurtmee shows you — at a glance — which PRs are
 open, who's behind them, whether CI is passing, and what needs your attention. When a build fails or
@@ -19,8 +23,8 @@ stays quiet and out of the way.
 - **Catch trouble early** — a desktop notification the moment CI **fails** or a workflow runs
   **slower than its usual time**, so you're not the last to find out.
 - **Cut the noise** — one-click filter chips ("just bots", "just security", …) narrow the feed.
-- **Make it yours** — five hand-built dark themes (Aurora, Velvet, Synthwave, Voltage, Ionix),
-  switchable on the fly.
+- **Make it yours** — six hand-built dark themes (Nebula, Aurora, Velvet, Synthwave, Voltage,
+  Ionix), switchable on the fly.
 - **Light and private** — easy on CPU/battery (it polls less when the window isn't focused), and
   your access token is stored **only in your system keychain** — never on disk, never in a log.
 

@@ -61,6 +61,10 @@ cargo run -p app
 3. Tick the repositories you'd like to keep an eye on.
 4. That's it — head back to the feed and it fills in.
 
+You only do this once: your token stays in the system keychain and your repo selection in the local
+database, so the next time you launch Alurtmee it reconnects and resumes polling automatically — no
+re-entry needed. (If the token is later revoked, you'll be asked to sign in again.)
+
 ## Using it
 
 - **Left pane:** your open PRs. Click one to see its full detail on the right. A small **dot** shows

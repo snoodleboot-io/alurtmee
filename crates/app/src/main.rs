@@ -123,6 +123,25 @@ impl Alurtmee {
 
         let (focus_tx, _) = watch::channel(true);
 
+        // Restore the previous session: a PAT validated in an earlier run still lives in the OS
+        // keychain (ARD AD-6), so rebuild the client and re-validate it in the background. On
+        // success this drives the normal `Validated` → `Listed` path — auth flips to authenticated,
+        // the repo list refills, and the poller subscription resumes — all with no re-entry. A
+        // missing token (first run) or a revoked one (validate fails) falls back to "not signed in".
+        let keychain = Keychain::new();
+        let restored_client = keychain
+            .get_token()
+            .ok()
+            .flatten()
+            .and_then(|token| GhClient::new(base_url.clone(), token).ok());
+        let boot_task = match restored_client.clone() {
+            Some(client) => Task::perform(
+                async move { client.validate().await.map_err(|err| err.to_string()) },
+                Message::Validated,
+            ),
+            None => Task::none(),
+        };
+
         let app = Self {
             model: SettingsModel::new().with_selection(selection),
             pr_list,
@@ -130,15 +149,15 @@ impl Alurtmee {
             selected,
             show_settings: false,
             skin,
-            keychain: Keychain::new(),
+            keychain,
             store,
             base_url,
-            client: None,
+            client: restored_client,
             dispatcher: NotificationDispatcher::new(XdgNotifier),
             focus_tx,
             notifications_enabled,
         };
-        (app, Task::none())
+        (app, boot_task)
     }
 
     fn skin(&self) -> Skin {

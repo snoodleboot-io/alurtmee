@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use directories::ProjectDirs;
 use domain::{
-    AuthorKind, Category, CategoryKind, ChangeEvent, Filter, Org, PollCadence, PrId, Repo, User,
+    AuthorKind, Category, CategoryKind, ChangeEvent, Filter, PollCadence, PrId, Repo, User,
 };
 use gh_client::GhClient;
 use iced::{Subscription, Task, Theme};
@@ -54,6 +54,8 @@ const POLL_MAX_INTERVAL: Duration = Duration::from_secs(300);
 
 const CONFIG_NOTIFICATIONS: &str = "notifications_enabled";
 const CONFIG_THEME: &str = "theme";
+/// Config key holding the JSON list of configured token `(label, login)` pairs.
+const CONFIG_PATS: &str = "pats";
 
 /// The running application.
 struct Alurtmee {
@@ -67,7 +69,6 @@ struct Alurtmee {
     keychain: Keychain,
     store: Store,
     base_url: String,
-    client: Option<GhClient>,
     dispatcher: NotificationDispatcher<XdgNotifier>,
     focus_tx: watch::Sender<bool>,
     notifications_enabled: bool,
@@ -76,9 +77,11 @@ struct Alurtmee {
 #[derive(Debug, Clone)]
 enum Message {
     PatInputChanged(String),
-    ValidatePressed,
-    Validated(Result<User, String>),
-    Listed(Result<(Vec<Org>, Vec<Repo>), String>),
+    LabelInputChanged(String),
+    AddPatPressed,
+    /// Result of validating + listing repos for the token labelled `String`.
+    PatValidated(String, Result<(User, Vec<Repo>), String>),
+    RemovePat(String),
     ToggleRepo(String),
     PollEvent(ChangeEvent),
     CorrectCategory(PrId, CategoryKind),
@@ -123,27 +126,34 @@ impl Alurtmee {
 
         let (focus_tx, _) = watch::channel(true);
 
-        // Restore the previous session: a PAT validated in an earlier run still lives in the OS
-        // keychain (ARD AD-6), so rebuild the client and re-validate it in the background. On
-        // success this drives the normal `Validated` → `Listed` path — auth flips to authenticated,
-        // the repo list refills, and the poller subscription resumes — all with no re-entry. A
-        // missing token (first run) or a revoked one (validate fails) falls back to "not signed in".
         let keychain = Keychain::new();
-        let restored_client = keychain
-            .get_token()
-            .ok()
-            .flatten()
-            .and_then(|token| GhClient::new(base_url.clone(), token).ok());
-        let boot_task = match restored_client.clone() {
-            Some(client) => Task::perform(
-                async move { client.validate().await.map_err(|err| err.to_string()) },
-                Message::Validated,
-            ),
-            None => Task::none(),
-        };
+
+        // Restore the previous session. Each configured token's `(label, login)` was persisted in
+        // the config DB; the secret itself is still in the OS keychain (ARD AD-6). On first launch
+        // of this multi-token build, migrate a single pre-labels credential to the "default" label.
+        let mut persisted = load_persisted_pats(&store);
+        if persisted.is_empty() {
+            if let Ok(Some(token)) = keychain.take_legacy_token() {
+                if keychain.set_token("default", &token).is_ok() {
+                    persisted = vec![("default".to_string(), None)];
+                }
+            }
+        }
+
+        let mut model = SettingsModel::new().with_selection(selection);
+        model.seed_pats(persisted.iter().cloned());
+
+        // Re-validate each configured token in the background so identities + repo lists refresh
+        // and the per-token pollers resume — all with no re-entry. A revoked token surfaces as a
+        // status error but is left in place for the user to remove.
+        let boot_task = Task::batch(persisted.into_iter().filter_map(|(label, _)| {
+            let token = keychain.get_token(&label).ok().flatten()?;
+            let client = GhClient::new(base_url.clone(), token).ok()?;
+            Some(validate_and_list_task(label, client))
+        }));
 
         let app = Self {
-            model: SettingsModel::new().with_selection(selection),
+            model,
             pr_list,
             filter: Filter::new(),
             selected,
@@ -152,7 +162,6 @@ impl Alurtmee {
             keychain,
             store,
             base_url,
-            client: restored_client,
             dispatcher: NotificationDispatcher::new(XdgNotifier),
             focus_tx,
             notifications_enabled,
@@ -174,57 +183,56 @@ impl Alurtmee {
                 self.model.pat_input_changed(value);
                 Task::none()
             }
-            Message::ValidatePressed => {
-                let Some(token) = self.model.start_validating() else {
+            Message::LabelInputChanged(value) => {
+                self.model.label_input_changed(value);
+                Task::none()
+            }
+            Message::AddPatPressed => {
+                let Some((label, token)) = self.model.start_adding_pat() else {
                     return Task::none();
                 };
-                if let Err(err) = self.keychain.set_token(&token) {
+                // Store before validating (matching the keychain-first invariant); on a build
+                // failure we roll the entry back so a junk credential never lingers.
+                if let Err(err) = self.keychain.set_token(&label, &token) {
                     self.model
-                        .validation_failed(format!("Could not store token in keychain: {err}"));
+                        .pat_failed(&label, format!("Could not store token in keychain: {err}"));
                     return Task::none();
                 }
-                let client = match GhClient::new(self.base_url.clone(), token) {
-                    Ok(client) => client,
+                match GhClient::new(self.base_url.clone(), token) {
+                    Ok(client) => validate_and_list_task(label, client),
                     Err(err) => {
+                        let _ = self.keychain.delete_token(&label);
                         self.model
-                            .validation_failed(format!("Could not build GitHub client: {err}"));
-                        return Task::none();
+                            .pat_failed(&label, format!("Could not build GitHub client: {err}"));
+                        Task::none()
                     }
-                };
-                self.client = Some(client.clone());
-                Task::perform(
-                    async move { client.validate().await.map_err(|err| err.to_string()) },
-                    Message::Validated,
-                )
+                }
             }
-            Message::Validated(Ok(user)) => {
-                self.model.validation_succeeded(user);
-                let Some(client) = self.client.clone() else {
-                    return Task::none();
-                };
-                Task::perform(
-                    async move {
-                        let orgs = client.list_orgs().await.map_err(|err| err.to_string())?;
-                        let repos = client
-                            .list_user_repos()
-                            .await
-                            .map_err(|err| err.to_string())?;
-                        Ok((orgs, repos))
-                    },
-                    Message::Listed,
-                )
-            }
-            Message::Validated(Err(reason)) => {
-                self.model.validation_failed(reason);
+            Message::PatValidated(label, Ok((user, repos))) => {
+                self.model.pat_validated(label, user, repos);
+                persist_pats(&self.store, &self.model);
                 Task::none()
             }
-            Message::Listed(Ok((orgs, repos))) => {
-                self.model.loaded_orgs(orgs);
-                self.model.loaded_repos(repos);
+            Message::PatValidated(label, Err(reason)) => {
+                self.model.pat_failed(&label, reason);
+                // A brand-new add that failed (or a token we never validated) has no identity, so
+                // drop its keychain entry; a known token that just failed re-validation is kept so
+                // the user can see and remove it deliberately.
+                let known = self
+                    .model
+                    .pats()
+                    .iter()
+                    .any(|p| p.label == label && p.login.is_some());
+                if !known {
+                    let _ = self.keychain.delete_token(&label);
+                }
+                persist_pats(&self.store, &self.model);
                 Task::none()
             }
-            Message::Listed(Err(reason)) => {
-                self.model.validation_failed(reason);
+            Message::RemovePat(label) => {
+                let _ = self.keychain.delete_token(&label);
+                self.model.remove_pat(&label);
+                persist_pats(&self.store, &self.model);
                 Task::none()
             }
             Message::ToggleRepo(full_name) => {
@@ -306,56 +314,64 @@ impl Alurtmee {
             _ => None,
         });
 
-        if !self.model.auth().is_authenticated() {
+        if !self.model.has_any_auth() {
             return focus;
         }
-        let repos: Vec<String> = self.model.selection().iter().map(str::to_string).collect();
-        if repos.is_empty() {
+        // Each watched repo is assigned to exactly one token, so we run one poller per token over a
+        // disjoint repo set — a repo (and its PRs) is never polled twice even when several tokens
+        // can see it.
+        let assignments = self.model.poll_assignments();
+        if assignments.is_empty() {
             return focus;
         }
-        let base_url = self.base_url.clone();
-        let focus_rx = self.focus_tx.subscribe();
-        let id = poll_subscription_id(&repos);
 
-        let poller = Subscription::run_with_id(
-            id,
-            iced::stream::channel(64, move |mut output| {
-                let repos = repos.clone();
-                let base_url = base_url.clone();
-                let focus_rx = focus_rx.clone();
-                async move {
-                    use iced::futures::SinkExt;
+        let mut subscriptions = vec![focus];
+        for (label, repos) in assignments {
+            let base_url = self.base_url.clone();
+            let focus_rx = self.focus_tx.subscribe();
+            let id = poll_subscription_id(&label, &repos);
 
-                    let Ok(Some(token)) = Keychain::new().get_token() else {
-                        tracing::warn!("poller: no token in keychain; not polling");
-                        return;
-                    };
-                    let client = match GhClient::new(base_url, token) {
-                        Ok(client) => client,
-                        Err(err) => {
-                            tracing::error!("poller: could not build client: {err}");
+            subscriptions.push(Subscription::run_with_id(
+                id,
+                iced::stream::channel(64, move |mut output| {
+                    let label = label.clone();
+                    let repos = repos.clone();
+                    let base_url = base_url.clone();
+                    let focus_rx = focus_rx.clone();
+                    async move {
+                        use iced::futures::SinkExt;
+
+                        let Ok(Some(token)) = Keychain::new().get_token(&label) else {
+                            tracing::warn!("poller[{label}]: no token in keychain; not polling");
                             return;
-                        }
-                    };
-                    let Some(store) = open_store_opt() else {
-                        tracing::error!("poller: could not open store");
-                        return;
-                    };
-                    let cadence = PollCadence::new(POLL_BASE_INTERVAL, POLL_MAX_INTERVAL);
-                    let poller = Poller::new(client, store, cadence);
+                        };
+                        let client = match GhClient::new(base_url, token) {
+                            Ok(client) => client,
+                            Err(err) => {
+                                tracing::error!("poller[{label}]: could not build client: {err}");
+                                return;
+                            }
+                        };
+                        let Some(store) = open_store_opt() else {
+                            tracing::error!("poller[{label}]: could not open store");
+                            return;
+                        };
+                        let cadence = PollCadence::new(POLL_BASE_INTERVAL, POLL_MAX_INTERVAL);
+                        let poller = Poller::new(client, store, cadence);
 
-                    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-                    tokio::spawn(poller.run(repos, tx, focus_rx));
-                    while let Some(event) = rx.recv().await {
-                        if output.send(Message::PollEvent(event)).await.is_err() {
-                            break;
+                        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+                        tokio::spawn(poller.run(repos, tx, focus_rx));
+                        while let Some(event) = rx.recv().await {
+                            if output.send(Message::PollEvent(event)).await.is_err() {
+                                break;
+                            }
                         }
                     }
-                }
-            }),
-        );
+                }),
+            ));
+        }
 
-        Subscription::batch([focus, poller])
+        Subscription::batch(subscriptions)
     }
 }
 
@@ -375,11 +391,54 @@ fn open_store_opt() -> Option<Store> {
     data_db_path().and_then(|path| Store::open(&path).ok())
 }
 
-fn poll_subscription_id(repos: &[String]) -> u64 {
+fn poll_subscription_id(label: &str, repos: &[String]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "alurtmee-poller".hash(&mut hasher);
+    label.hash(&mut hasher);
     repos.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Fire a background task that validates the token labelled `label` and lists the repos it can see,
+/// reporting back as [`Message::PatValidated`]. The token itself is captured inside `client` and
+/// never travels through a `Message`.
+fn validate_and_list_task(label: String, client: GhClient) -> Task<Message> {
+    Task::perform(
+        async move {
+            let user = client.validate().await.map_err(|err| err.to_string())?;
+            let repos = client
+                .list_user_repos()
+                .await
+                .map_err(|err| err.to_string())?;
+            Ok((user, repos))
+        },
+        move |result| Message::PatValidated(label.clone(), result),
+    )
+}
+
+/// Load the persisted `(label, login)` pairs for configured tokens from the config DB.
+fn load_persisted_pats(store: &Store) -> Vec<(String, Option<String>)> {
+    store
+        .get_config(CONFIG_PATS)
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(label, login)| (label, Some(login)))
+        .collect()
+}
+
+/// Persist the validated tokens' `(label, login)` pairs (the secret stays in the keychain).
+fn persist_pats(store: &Store, model: &SettingsModel) {
+    match serde_json::to_string(&model.persisted_pats()) {
+        Ok(json) => {
+            if let Err(err) = store.set_config(CONFIG_PATS, &json) {
+                tracing::error!("failed to persist token list: {err}");
+            }
+        }
+        Err(err) => tracing::error!("failed to serialize token list: {err}"),
+    }
 }
 
 fn data_db_path() -> Option<String> {

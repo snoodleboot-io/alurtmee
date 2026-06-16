@@ -1,8 +1,8 @@
-//! OS keychain wrapper for the GitHub personal access token (PAT).
+//! OS keychain wrapper for the GitHub personal access tokens (PATs).
 //!
 //! # Why the OS keychain and not an encrypted file
 //!
-//! The PAT is the single highest-value secret in Alurtmee, and AD-6 (SECURITY-critical) requires it
+//! A PAT is the single highest-value secret in Alurtmee, and AD-6 (SECURITY-critical) requires it
 //! to live in the OS-managed secret store, never in SQLite, config files, or logs. We delegate to
 //! the OS keychain (Secret Service / Keychain Access / Windows Credential Manager) rather than
 //! rolling an encrypted file because:
@@ -12,12 +12,15 @@
 //! - **Per-user isolation.** Entries are scoped to the logged-in user by the OS; another local
 //!   account cannot read them.
 //! - **No key-management burden.** An encrypted file would force us to derive, store, and rotate a
-//!   master key — itself a secret needing the same protection, just moving the problem. The keychain
-//!   removes that bootstrap entirely.
+//!   master key — itself a secret needing the same protection, just moving the problem.
 //!
-//! This is the mechanism that upholds the privacy invariant: the token is reachable only through
-//! the live OS keychain session, and this type deliberately never keeps the token in memory beyond
-//! the call that uses it.
+//! # Multiple tokens
+//!
+//! Alurtmee supports more than one PAT (e.g. a personal token and a work/org token). Each is keyed
+//! by a user-chosen **label** and stored under its own keychain account (`github-pat:{label}`), so
+//! tokens never collide. The set of labels is tracked separately by the app (in the local config
+//! DB); the keychain itself is not enumerable. [`take_legacy_token`](Keychain::take_legacy_token)
+//! migrates a single-token database written before labels existed.
 
 use keyring::{Entry, Error as KeyringError};
 
@@ -26,17 +29,21 @@ use crate::error::StoreError;
 /// The keychain service name under which Alurtmee stores its credentials.
 const SERVICE: &str = "alurtmee";
 
-/// The account/username the PAT is stored under within the service.
-const ACCOUNT: &str = "github-pat";
+/// Prefix for the per-label account name. A token labelled `work` is stored under the keychain
+/// account `github-pat:work`.
+const ACCOUNT_PREFIX: &str = "github-pat:";
 
-/// Handle to the OS keychain entry holding the GitHub PAT.
+/// The account a single token was stored under before multi-token support (no label). Read once on
+/// upgrade by [`Keychain::take_legacy_token`] and then retired.
+const LEGACY_ACCOUNT: &str = "github-pat";
+
+/// Handle to the OS keychain for Alurtmee's GitHub PATs.
 ///
-/// Holds only the non-secret service/account identifiers — never the token itself — so its derived
-/// [`Debug`] cannot leak a credential.
+/// Holds only the non-secret service identifier — never a token — so its derived [`Debug`] cannot
+/// leak a credential. Each operation targets a specific token by its `label`.
 #[derive(Debug, Clone)]
 pub struct Keychain {
     service: String,
-    account: String,
 }
 
 impl Default for Keychain {
@@ -46,11 +53,10 @@ impl Default for Keychain {
 }
 
 impl Keychain {
-    /// Construct a keychain handle for the production service/account.
+    /// Construct a keychain handle for the production service.
     pub fn new() -> Self {
         Self {
             service: SERVICE.to_string(),
-            account: ACCOUNT.to_string(),
         }
     }
 
@@ -59,34 +65,55 @@ impl Keychain {
     pub(crate) fn with_service(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
-            account: ACCOUNT.to_string(),
         }
     }
 
-    fn entry(&self) -> Result<Entry, StoreError> {
-        Ok(Entry::new(&self.service, &self.account)?)
+    fn entry_for_account(&self, account: &str) -> Result<Entry, StoreError> {
+        Ok(Entry::new(&self.service, account)?)
     }
 
-    /// Store (or overwrite) the GitHub token in the OS keychain.
-    pub fn set_token(&self, token: &str) -> Result<(), StoreError> {
-        self.entry()?.set_password(token)?;
+    fn entry(&self, label: &str) -> Result<Entry, StoreError> {
+        self.entry_for_account(&format!("{ACCOUNT_PREFIX}{label}"))
+    }
+
+    /// Store (or overwrite) the GitHub token for `label` in the OS keychain.
+    pub fn set_token(&self, label: &str, token: &str) -> Result<(), StoreError> {
+        self.entry(label)?.set_password(token)?;
         Ok(())
     }
 
-    /// Read the GitHub token from the OS keychain, or `None` if no entry exists yet.
-    pub fn get_token(&self) -> Result<Option<String>, StoreError> {
-        match self.entry()?.get_password() {
+    /// Read the GitHub token for `label`, or `None` if no entry exists.
+    pub fn get_token(&self, label: &str) -> Result<Option<String>, StoreError> {
+        match self.entry(label)?.get_password() {
             Ok(token) => Ok(Some(token)),
             Err(KeyringError::NoEntry) => Ok(None),
             Err(other) => Err(StoreError::Keyring(other)),
         }
     }
 
-    /// Delete the GitHub token from the OS keychain. Absent entry is treated as success.
-    pub fn delete_token(&self) -> Result<(), StoreError> {
-        match self.entry()?.delete_credential() {
+    /// Delete the token for `label`. An absent entry is treated as success.
+    pub fn delete_token(&self, label: &str) -> Result<(), StoreError> {
+        match self.entry(label)?.delete_credential() {
             Ok(()) => Ok(()),
             Err(KeyringError::NoEntry) => Ok(()),
+            Err(other) => Err(StoreError::Keyring(other)),
+        }
+    }
+
+    /// Read and remove a pre-multi-token credential, if one exists.
+    ///
+    /// Older builds stored a single token under an un-labelled account. On first launch of a
+    /// multi-token build the app calls this to migrate that token to a label; returning `None` once
+    /// it has been retired, so the migration runs at most once.
+    pub fn take_legacy_token(&self) -> Result<Option<String>, StoreError> {
+        let entry = self.entry_for_account(LEGACY_ACCOUNT)?;
+        match entry.get_password() {
+            Ok(token) => {
+                // Best-effort retire so we never migrate twice; ignore a delete race.
+                let _ = entry.delete_credential();
+                Ok(Some(token))
+            }
+            Err(KeyringError::NoEntry) => Ok(None),
             Err(other) => Err(StoreError::Keyring(other)),
         }
     }
@@ -97,32 +124,50 @@ mod tests {
     use super::*;
 
     /// Full lifecycle against the live Secret Service. Uses a process-unique service name so
-    /// concurrent runs cannot collide, and always deletes the entry before asserting so a failed
+    /// concurrent runs cannot collide, and always deletes the entries before asserting so a failed
     /// assertion cannot leave a credential behind.
     #[test]
-    fn token_round_trip_against_live_keychain() {
+    fn labelled_tokens_round_trip_independently() {
         let service = format!("alurtmee-test-{}", std::process::id());
         let keychain = Keychain::with_service(service);
-        let dummy = "dummy-token-not-a-real-pat";
 
         // Absent before anything is written.
+        assert_eq!(keychain.get_token("personal").expect("get absent"), None);
+
+        keychain.set_token("personal", "tok-personal").expect("set");
+        keychain.set_token("work", "tok-work").expect("set");
+
+        let personal = keychain.get_token("personal").expect("get personal");
+        let work = keychain.get_token("work").expect("get work");
+
+        // Clean up before asserting so a failure still removes the credentials.
+        keychain.delete_token("personal").expect("delete personal");
+        keychain.delete_token("work").expect("delete work");
+
+        assert_eq!(personal.as_deref(), Some("tok-personal"));
+        assert_eq!(work.as_deref(), Some("tok-work"), "labels are independent");
         assert_eq!(
-            keychain.get_token().expect("get absent token"),
-            None,
-            "fresh service should have no entry"
-        );
-
-        keychain.set_token(dummy).expect("set token");
-        let read = keychain.get_token().expect("get token after set");
-
-        // Clean up before asserting on the read so a failure here still removes the credential.
-        keychain.delete_token().expect("delete token");
-
-        assert_eq!(read.as_deref(), Some(dummy));
-        assert_eq!(
-            keychain.get_token().expect("get after delete"),
+            keychain.get_token("personal").expect("get after delete"),
             None,
             "entry must be gone after delete"
         );
+    }
+
+    #[test]
+    fn take_legacy_token_migrates_once_then_is_none() {
+        let service = format!("alurtmee-legacy-test-{}", std::process::id());
+        let keychain = Keychain::with_service(service.clone());
+
+        // Seed an un-labelled legacy entry directly.
+        Entry::new(&service, LEGACY_ACCOUNT)
+            .expect("entry")
+            .set_password("legacy-tok")
+            .expect("seed legacy");
+
+        let first = keychain.take_legacy_token().expect("take legacy");
+        let second = keychain.take_legacy_token().expect("take legacy again");
+
+        assert_eq!(first.as_deref(), Some("legacy-tok"));
+        assert_eq!(second, None, "legacy token is retired after first take");
     }
 }

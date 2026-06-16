@@ -8,9 +8,9 @@ use iced::widget::{
 };
 use iced::{Alignment, Border, Color, Element, Length, Theme};
 
-use domain::{AuthState, AuthorKind, CategoryKind, CiAlertKind, CommentKind, PullRequest};
+use domain::{AuthorKind, CategoryKind, CiAlertKind, CommentKind, PullRequest};
 
-use crate::theme::{skin_names, Skin, FONT_BOLD, FONT_SEMIBOLD, MASTER_WIDTH, RADIUS};
+use crate::theme::{skin_names, Skin, FONT_BOLD, FONT_MEDIUM, FONT_SEMIBOLD, MASTER_WIDTH, RADIUS};
 use crate::widgets::*;
 use crate::{Alurtmee, Message};
 
@@ -38,13 +38,20 @@ impl Alurtmee {
     }
 
     fn has_feed(&self) -> bool {
-        self.model.auth().is_authenticated() || !self.pr_list.is_empty()
+        self.model.has_any_auth() || !self.pr_list.is_empty()
     }
 
     fn top_bar(&self, s: Skin) -> Element<'_, Message> {
-        let signed_in = match self.model.auth() {
-            AuthState::Authenticated(u) => format!("@{}", u.login),
-            _ => "not signed in".to_string(),
+        let logins: Vec<&str> = self
+            .model
+            .pats()
+            .iter()
+            .filter_map(|p| p.login.as_deref())
+            .collect();
+        let signed_in = match logins.as_slice() {
+            [] => "not signed in".to_string(),
+            [one] => format!("@{one}"),
+            many => format!("{} tokens", many.len()),
         };
         row![
             brand_mark(),
@@ -384,18 +391,6 @@ impl Alurtmee {
     }
 
     fn settings_view(&self, s: Skin) -> Element<'_, Message> {
-        let identity = match self.model.auth() {
-            AuthState::Authenticated(user) => format!("Signed in as {}", user.login),
-            AuthState::Invalid(reason) => format!("Not signed in — {reason}"),
-            AuthState::Unauthenticated => "Not signed in".to_string(),
-        };
-
-        let validate = primary_button(
-            s,
-            "Validate",
-            (!self.model.is_busy()).then_some(Message::ValidatePressed),
-        );
-
         let theme_picker = pick_list(
             skin_names(),
             Some(self.skin().name.to_string()),
@@ -429,26 +424,26 @@ impl Alurtmee {
             selected_background: s.accent.into(),
         });
 
-        let token_input = text_input("ghp_…", self.model.pat_input())
+        let label_input = text_input("label (e.g. work)", self.model.label_input())
+            .on_input(Message::LabelInputChanged)
+            .padding(11)
+            .width(Length::Fixed(170.0))
+            .style(input_style(s));
+
+        let token_input = text_input("paste a PAT (ghp_…)", self.model.pat_input())
             .on_input(Message::PatInputChanged)
             .secure(true)
             .padding(11)
-            .style(move |_t: &Theme, _st| text_input::Style {
-                background: s.surface.into(),
-                border: Border {
-                    color: s.border,
-                    width: 1.0,
-                    radius: RADIUS.into(),
-                },
-                icon: s.muted,
-                placeholder: s.muted,
-                value: s.text,
-                selection: tint(s.accent, 0.35),
-            });
+            .style(input_style(s));
+
+        let add_button = primary_button(
+            s,
+            "Add token",
+            (!self.model.is_busy()).then_some(Message::AddPatPressed),
+        );
 
         let mut panel = column![
             text("Settings").size(22).color(s.text).font(FONT_BOLD),
-            text(identity).size(14).color(s.muted),
             rule(s),
             text("Theme").size(15).color(s.text).font(FONT_SEMIBOLD),
             row![
@@ -460,28 +455,49 @@ impl Alurtmee {
             .spacing(12)
             .align_y(Alignment::Center),
             rule(s),
-            text("GitHub personal access token")
-                .size(13)
+            text("GitHub tokens")
+                .size(15)
                 .color(s.text)
                 .font(FONT_SEMIBOLD),
-            token_input,
-            validate,
-            text(self.model.status().to_string())
-                .size(13)
-                .color(s.muted),
         ]
         .spacing(10);
 
-        if !self.model.orgs().is_empty() {
-            let logins: Vec<&str> = self.model.orgs().iter().map(|o| o.login.as_str()).collect();
+        // Configured tokens, each with its identity and a remove button.
+        for pat in self.model.pats() {
+            let who = match &pat.login {
+                Some(login) => format!("@{login}  ·  {} repos", pat.repos.len()),
+                None => "validating…".to_string(),
+            };
+            let label = pat.label.clone();
             panel = panel.push(
-                text(format!("Organizations: {}", logins.join(", ")))
-                    .size(12)
-                    .color(s.muted),
+                row![
+                    text(pat.label.clone())
+                        .size(13)
+                        .color(s.text)
+                        .font(FONT_MEDIUM),
+                    text(who).size(12).color(s.muted),
+                    horizontal_space(),
+                    ghost_button(s, "remove", Message::RemovePat(label)),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
             );
         }
 
-        if !self.model.repos().is_empty() {
+        // Add-a-token row: label + PAT + Add.
+        panel = panel.push(
+            row![label_input, token_input, add_button]
+                .spacing(8)
+                .align_y(Alignment::Center),
+        );
+        panel = panel.push(
+            text(self.model.status().to_string())
+                .size(13)
+                .color(s.muted),
+        );
+
+        let repos = self.model.repos();
+        if !repos.is_empty() {
             panel = panel.push(rule(s));
             panel = panel.push(
                 text(format!(
@@ -492,9 +508,7 @@ impl Alurtmee {
                 .color(s.text)
                 .font(FONT_SEMIBOLD),
             );
-            let repos: Vec<Element<Message>> = self
-                .model
-                .repos()
+            let repo_rows: Vec<Element<Message>> = repos
                 .iter()
                 .map(|repo| {
                     let full_name = repo.full_name.clone();
@@ -510,7 +524,7 @@ impl Alurtmee {
                         .into()
                 })
                 .collect();
-            panel = panel.push(scrollable(column(repos).spacing(6)).height(Length::Fill));
+            panel = panel.push(scrollable(column(repo_rows).spacing(6)).height(Length::Fill));
         }
 
         if self.has_feed() {

@@ -1,10 +1,16 @@
-# Rust
+# Rust / Cargo
 /target/
+debug
 **/*.rs.bk
+*.pdb
 
 # Session files (per .claude conventions: gitignored, never committed)
 .prompticorn/sessions/
 
+# Cargo mutants
+**/mutants.out*/
+
 # OS / editor
 .DS_Store
 *.swp
+#.idea/

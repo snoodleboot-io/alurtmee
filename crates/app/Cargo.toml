@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "A calm desktop app for keeping an eye on your GitHub pull requests."
 
 # Iced UI + binary (ARD AD-2). Phase 0 ships a real, runnable empty window; the poller→store→UI
 # wiring and native notifications land in later phases. `tracing` init is added by the
@@ -32,3 +33,21 @@ serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
+# Debian packaging (`cargo deb -p app`). When `assets` is given, cargo-deb uses *exactly* that list,
+# so the binary must be listed too. Paths are relative to this manifest, hence `../../` into the
+# workspace root.
+[package.metadata.deb]
+name = "alurtmee"
+maintainer = "John Aven <john@snoodleboot.com>"
+copyright = "2026, Snoodleboot"
+license-file = ["../../LICENSE", "0"]
+extended-description = "A calm desktop app for keeping an eye on your GitHub pull requests: open PRs across the repos you pick, with reviews, CI status, classification, and desktop alerts."
+section = "utils"
+priority = "optional"
+assets = [
+    ["../../target/release/alurtmee", "usr/bin/", "755"],
+    ["../../packaging/alurtmee.desktop", "usr/share/applications/", "644"],
+    ["../../assets/logo-128.png", "usr/share/icons/hicolor/256x256/apps/alurtmee.png", "644"],
+]
+depends = "$auto, libxkbcommon0, libwayland-client0, libgl1, gnome-keyring"

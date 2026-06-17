@@ -1,0 +1,66 @@
+# Auto-bump the VERSION file on a release-labelled PR.
+#
+# When a PR carries `release` (minor), `release:major`, or `release:patch`, this commits the new
+# semantic version onto the PR's own branch — feature branches aren't protected, so no push to
+# `main` and no bypass token is needed. The merge then carries the bumped VERSION into `main`, and
+# `release.yml` publishes it.
+#
+# The bump is computed from `main`'s current VERSION, and is a no-op if the branch already has the
+# target version (so re-runs after the bump commit don't loop).
+name: version-bump
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: write # push the bump commit to the PR branch
+
+concurrency:
+  group: bump-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'release') ||
+      contains(github.event.pull_request.labels.*.name, 'release:major') ||
+      contains(github.event.pull_request.labels.*.name, 'release:patch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Compute target version from main + label
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          git fetch origin main --depth=1
+          base="$(git show origin/main:VERSION 2>/dev/null || echo 0.0.0)"
+          IFS=. read -r MAJ MIN PAT <<< "$base"
+          if [[ " $LABELS " == *" release:major "* ]]; then
+            next="$((MAJ + 1)).0.0"
+          elif [[ " $LABELS " == *" release:patch "* ]]; then
+            next="${MAJ}.${MIN}.$((PAT + 1))"
+          else
+            next="${MAJ}.$((MIN + 1)).0"
+          fi
+          echo "NEXT=$next" >> "$GITHUB_ENV"
+          echo "main is v$base → target v$next"
+
+      - name: Apply bump to the PR branch (if not already done)
+        run: |
+          cur="$(cat VERSION 2>/dev/null || echo unset)"
+          if [[ "$cur" == "$NEXT" ]]; then
+            echo "VERSION already $NEXT — nothing to do."
+            exit 0
+          fi
+          echo "$NEXT" > VERSION
+          sed -i "0,/^version = / s/^version = .*/version = \"$NEXT\"/" Cargo.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): set version to v$NEXT"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"

@@ -30,8 +30,41 @@ stays quiet and out of the way.
 
 ## Installing
 
-Alurtmee runs on **Linux** today (macOS and Windows are planned). For now you build it from source;
-packaged installers (AppImage / `.deb`) are on the way.
+Alurtmee runs on **Linux** today (macOS and Windows are planned). Grab a packaged build from the
+[**Releases**](https://github.com/snoodleboot-io/alurtmee/releases/latest) page, or build from source.
+
+It renders with your GPU and stores your token in the system keychain, so you need GPU drivers
+(`mesa-vulkan-drivers`) and a Secret Service daemon (`gnome-keyring`) present either way.
+
+### Option A — AppImage (no install)
+
+```bash
+# from the latest release; or download via the Releases page
+curl -L -o Alurtmee.AppImage \
+  https://github.com/snoodleboot-io/alurtmee/releases/latest/download/Alurtmee-x86_64.AppImage
+chmod +x Alurtmee.AppImage
+./Alurtmee.AppImage
+```
+
+### Option B — Debian / Ubuntu `.deb`
+
+```bash
+sudo apt install ./alurtmee_*_amd64.deb   # pulls in its runtime dependencies
+alurtmee
+```
+
+### Verify your download
+
+Every release ships a `SHA256SUMS` file and a signed build-provenance attestation, so you can
+confirm the binary is intact and was built by this repo's CI:
+
+```bash
+sha256sum -c SHA256SUMS                                   # integrity
+gh attestation verify Alurtmee.AppImage \
+  --repo snoodleboot-io/alurtmee                          # authenticity (needs the gh CLI)
+```
+
+### Option C — build from source
 
 You'll need [Rust](https://rustup.rs) and a few system libraries:
 
@@ -39,13 +72,9 @@ You'll need [Rust](https://rustup.rs) and a few system libraries:
 # Debian / Ubuntu
 sudo apt-get install -y \
   libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
-  libgl1-mesa-dev mesa-vulkan-drivers \
+  libgl1-mesa-dev mesa-vulkan-drivers libdbus-1-dev \
   gnome-keyring dbus-x11
-```
 
-Then:
-
-```bash
 git clone https://github.com/snoodleboot-io/alurtmee.git
 cd alurtmee
 cargo run -p app
@@ -106,6 +135,19 @@ A couple of environment variables you might use:
 
 Bug reports and ideas are welcome via [issues](https://github.com/snoodleboot-io/alurtmee/issues).
 It's a Rust workspace — `cargo test --workspace` runs the suite.
+
+**Releases are label-driven.** The version lives in the [`VERSION`](VERSION) file (semantic
+versioning). Add a label to a PR and the version is bumped automatically on its own branch; merging
+it then builds the `.deb` + AppImage and publishes a GitHub Release — no manual tags.
+
+| Label | Bump | Example |
+|-------|------|---------|
+| `release` | minor | `0.3.0` → `0.4.0` |
+| `release:major` | major | `0.4.0` → `1.0.0` |
+| `release:patch` | patch | `0.4.0` → `0.4.1` |
+
+A PR with no release label merges without cutting a release. `main` is protected (changes land via
+PR), so the bump is committed to the PR branch — never pushed to `main` directly.
 
 ## License
 

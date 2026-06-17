@@ -1,24 +1,19 @@
-# Release workflow for Alurtmee — versioned by a file, not by hand-made tags.
+# Publish a release when a release-labelled PR is merged.
 #
-# `VERSION` (repo root) is the source of truth. Every push to `main` (i.e. every merge) bumps the
-# **minor** version, builds a release binary, packages a `.deb` and an AppImage, writes SHA256SUMS,
-# attaches a signed build-provenance attestation, and publishes a GitHub Release. CI creates the
-# `vX.Y.0` tag for you — you never run `git tag`.
+# `version-bump.yml` already bumped the VERSION file on the PR branch, so by the time the PR merges,
+# `main` holds the new version. This job reads it, builds a release binary, packages a `.deb` and an
+# AppImage, writes SHA256SUMS, attaches a signed build-provenance attestation, and publishes a
+# GitHub Release with the `vX.Y.Z` tag — created by CI, so you never run `git tag`.
 #
-# To jump a major (or set an explicit version), edit `VERSION` in a PR; the next merge bumps the
-# minor from whatever it says.
-#
-# Loop-safety: the version-bump commit is pushed with `GITHUB_TOKEN`, and GitHub does not start new
-# workflow runs from `GITHUB_TOKEN` pushes — so the release does not re-trigger itself. The `if`
-# guard is a belt-and-suspenders backup.
+# Nothing here pushes to `main`, so it is fully compatible with branch protection.
 name: release
 
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [closed]
 
 permissions:
-  contents: write # push the bump commit + create the release
+  contents: write # create the release + tag
   id-token: write # OIDC token for provenance attestation
   attestations: write # write the attestation
 
@@ -28,21 +23,24 @@ concurrency:
 
 jobs:
   release:
-    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    if: >-
+      github.event.pull_request.merged == true && (
+      contains(github.event.pull_request.labels.*.name, 'release') ||
+      contains(github.event.pull_request.labels.*.name, 'release:major') ||
+      contains(github.event.pull_request.labels.*.name, 'release:patch'))
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout the merge commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - name: Compute next minor version
+      - name: Read version
         run: |
-          cur="$(cat VERSION)"
-          IFS=. read -r MAJ MIN _ <<< "$cur"
-          next="${MAJ}.$((MIN + 1)).0"
-          echo "VERSION=$next" >> "$GITHUB_ENV"
-          echo "Releasing v$next (current VERSION file: $cur)"
+          v="$(cat VERSION)"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "Publishing v$v"
 
       - name: Install system deps (Iced build + packaging)
         run: |
@@ -56,12 +54,6 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
-
-      - name: Apply new version to the version files
-        run: |
-          echo "$VERSION" > VERSION
-          # Replace the first `version = "..."` (the [workspace.package] one) only.
-          sed -i "0,/^version = / s/^version = .*/version = \"$VERSION\"/" Cargo.toml
 
       - name: Build release binary
         run: cargo build --release -p app --bin alurtmee
@@ -94,16 +86,6 @@ jobs:
           sha256sum ./*.AppImage ./*.deb > SHA256SUMS
           cat SHA256SUMS
 
-      # Only after a successful build+package do we consume the version: commit the bump back to
-      # main, then publish. A failure above leaves VERSION untouched so the next merge retries it.
-      - name: Commit version bump to main
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add VERSION Cargo.toml Cargo.lock
-          git commit -m "chore(release): v$VERSION"
-          git push origin HEAD:main
-
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
         with:
@@ -116,7 +98,7 @@ jobs:
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
-          target_commitish: main
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
           files: |
             dist/*.AppImage
             dist/*.deb

@@ -72,7 +72,7 @@ You'll need [Rust](https://rustup.rs) and a few system libraries:
 # Debian / Ubuntu
 sudo apt-get install -y \
   libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
-  libgl1-mesa-dev mesa-vulkan-drivers \
+  libgl1-mesa-dev mesa-vulkan-drivers libdbus-1-dev \
   gnome-keyring dbus-x11
 
 git clone https://github.com/snoodleboot-io/alurtmee.git

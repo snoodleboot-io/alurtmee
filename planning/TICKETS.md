@@ -24,3 +24,4 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-16 | Restore session on launch — re-read keychained PAT in `boot`, re-validate, resume polling (no re-entry) | `feat/ALRT-16-restore-session` | Merged |
 | ALRT-17 | Multiple labelled PATs + dedupe — keychain per-label tokens, aggregated/deduped repo list, one poller per token over disjoint repos | `feat/ALRT-17-multi-pat` | Merged |
 | ALRT-18 | Ownership rule: org/collaborator access trumps personal account when assigning a shared repo to a poller | `feat/ALRT-18-org-trumps-personal` | Merged |
+| ALRT-20 | Release pipeline — GitHub Actions on tag: AppImage + .deb, SHA256SUMS, build-provenance attestation, GH Release | `feat/ALRT-20-release-pipeline` | In Review |

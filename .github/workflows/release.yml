@@ -1,0 +1,99 @@
+# Release workflow for Alurtmee.
+#
+# Trigger: push a tag like `v0.1.0` (the version should match `workspace.package.version`).
+# It builds a release binary, packages a `.deb` and an AppImage, writes SHA256SUMS, attaches a
+# signed build-provenance attestation, and publishes a GitHub Release with all assets.
+#
+# Security: artifacts are built in CI (not on a laptop), served over HTTPS by GitHub Releases, and
+# carry a verifiable provenance attestation — `gh attestation verify <file> --repo <owner>/<repo>`.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the release + upload assets
+  id-token: write # OIDC token for provenance attestation
+  attestations: write # write the attestation
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install system deps (Iced build + packaging)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxkbcommon-x11-dev \
+            libx11-dev \
+            libgl1-mesa-dev \
+            mesa-vulkan-drivers \
+            gnome-keyring \
+            dbus-x11 \
+            file
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p app --bin alurtmee
+
+      - name: Prepare dist
+        run: mkdir -p dist
+
+      - name: Package .deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p app --no-build
+          cp target/debian/*.deb dist/
+
+      - name: Package AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          OUTPUT: "Alurtmee-${{ env.VERSION }}-x86_64.AppImage"
+        run: |
+          cp assets/logo-128.png alurtmee.png
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable target/release/alurtmee \
+            --desktop-file packaging/alurtmee.desktop \
+            --icon-file alurtmee.png \
+            --output appimage
+          mv Alurtmee-*-x86_64.AppImage dist/ 2>/dev/null || mv ./*.AppImage dist/
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum ./*.AppImage ./*.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/*.AppImage
+            dist/*.deb
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/SHA256SUMS
+          generate_release_notes: true

@@ -3,16 +3,16 @@
 //! fields, so the rendering code reads `self.*` exactly as before while no longer crowding `main`.
 
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_input,
+    button, checkbox, column, container, horizontal_space, image, pick_list, row, scrollable,
+    stack, text, text_input,
 };
-use iced::{Alignment, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Border, Color, ContentFit, Element, Length, Theme};
 
 use domain::{AuthorKind, CategoryKind, CiAlertKind, CommentKind, PullRequest};
 
 use crate::theme::{skin_names, Skin, FONT_BOLD, FONT_MEDIUM, FONT_SEMIBOLD, MASTER_WIDTH, RADIUS};
 use crate::widgets::*;
-use crate::{Alurtmee, Message};
+use crate::{splash_frames, Alurtmee, Message, SPLASH_FADE_TICKS};
 
 impl Alurtmee {
     pub(crate) fn view(&self) -> Element<'_, Message> {
@@ -28,10 +28,45 @@ impl Alurtmee {
             .padding(18)
             .height(Length::Fill);
 
-        container(body)
+        let base: Element<'_, Message> = container(body)
             .style(move |_t: &Theme| container::Style {
                 background: Some(s.bg.into()),
                 text_color: Some(s.text),
+                ..Default::default()
+            })
+            .into();
+
+        // While the startup animation runs, layer it over the (already-populated) UI and let it
+        // fade away to reveal it.
+        match self.splash {
+            Some(tick) => stack![base, self.splash_overlay(s, tick)].into(),
+            None => base,
+        }
+    }
+
+    /// The startup-animation overlay: the current frame centered on the theme background, both
+    /// fading to transparent over the trailing fade ticks so the UI underneath is revealed.
+    fn splash_overlay(&self, s: Skin, tick: usize) -> Element<'_, Message> {
+        let frame_count = splash_frames::FRAMES.len();
+        let frame = tick.min(frame_count - 1);
+        let alpha = if tick < frame_count {
+            1.0
+        } else {
+            let into_fade = (tick - frame_count + 1) as f32;
+            (1.0 - into_fade / SPLASH_FADE_TICKS as f32).clamp(0.0, 1.0)
+        };
+
+        let art = image(image::Handle::from_bytes(splash_frames::FRAMES[frame]))
+            .opacity(alpha)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(ContentFit::Cover);
+
+        container(art)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_t: &Theme| container::Style {
+                background: Some(Color { a: alpha, ..s.bg }.into()),
                 ..Default::default()
             })
             .into()

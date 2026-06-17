@@ -7,6 +7,44 @@ use crate::error::StoreError;
 use crate::store::Store;
 
 impl Store {
+    /// Persist a PR's classification verdict (human/bot + feature/security) as JSON, so the feed's
+    /// tags survive a restart.
+    pub fn save_classification(
+        &self,
+        classification: &domain::Classification,
+    ) -> Result<(), StoreError> {
+        let json =
+            serde_json::to_string(classification).map_err(|e| StoreError::Decode(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO classifications (repo, number, json) VALUES (?1, ?2, ?3)
+             ON CONFLICT(repo, number) DO UPDATE SET json = excluded.json",
+            params![classification.id.repo, classification.id.number, json],
+        )?;
+        Ok(())
+    }
+
+    /// Load a PR's stored classification, or `None` if it was never classified. Malformed stored
+    /// JSON maps to [`StoreError::Decode`].
+    pub fn load_classification(
+        &self,
+        id: &domain::PrId,
+    ) -> Result<Option<domain::Classification>, StoreError> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT json FROM classifications WHERE repo = ?1 AND number = ?2",
+                params![id.repo, id.number],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match json {
+            None => Ok(None),
+            Some(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|e| StoreError::Decode(e.to_string())),
+        }
+    }
+
     /// Insert or overwrite the user's per-PR category override.
     ///
     /// The category is stored as text via `serde_json`, which serializes a [`domain::CategoryKind`]

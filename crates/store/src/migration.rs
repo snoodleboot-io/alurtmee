@@ -44,6 +44,8 @@ struct Migration {
 ///   inconsistent. A no-op on databases that already have them.
 /// - v7 clears the `etags` cache so a database wedged by the v6-era inconsistency (recorded ETags
 ///   but empty PR cache → permanent 304s) refetches once and recovers.
+/// - v8 introduces `classifications` (per-PR human/bot + feature/security verdict as JSON) so the
+///   feed's tags survive a restart.
 ///
 /// Secrets never land in any of these tables — the GitHub token lives in the OS keychain only
 /// (ARD AD-6).
@@ -159,6 +161,19 @@ const MIGRATIONS: &[Migration] = &[
         // cache is empty — permanently wedged. Dropping the ETags forces one full refetch that
         // re-populates the cache. Harmless on a healthy database (it just refetches once).
         apply: Step::Run(clear_stale_etags),
+    },
+    Migration {
+        version: 8,
+        // v8 introduces `classifications` (the per-PR human/bot + feature/security verdict, stored
+        // as JSON) so the feed's tags survive a restart instead of waiting for the next poll diff.
+        apply: Step::Sql(
+            "CREATE TABLE IF NOT EXISTS classifications (
+                  repo   TEXT    NOT NULL,
+                  number INTEGER NOT NULL,
+                  json   TEXT    NOT NULL,
+                  PRIMARY KEY (repo, number)
+              );",
+        ),
     },
 ];
 

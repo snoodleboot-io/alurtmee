@@ -21,6 +21,7 @@ mod notification_dispatcher;
 mod notifier;
 mod pr_list_model;
 mod settings_model;
+mod splash_frames;
 mod telemetry;
 mod theme;
 mod view;
@@ -57,6 +58,11 @@ const CONFIG_THEME: &str = "theme";
 /// Config key holding the JSON list of configured token `(label, login)` pairs.
 const CONFIG_PATS: &str = "pats";
 
+/// Milliseconds per splash frame: 1000/12 ≈ the 12 fps source rate, i.e. original playback speed.
+const SPLASH_TICK_MS: u64 = 83;
+/// Number of trailing ticks over which the splash fades into the UI (~0.55s).
+const SPLASH_FADE_TICKS: usize = 12;
+
 /// The running application.
 struct Alurtmee {
     model: SettingsModel,
@@ -72,6 +78,8 @@ struct Alurtmee {
     dispatcher: NotificationDispatcher<XdgNotifier>,
     focus_tx: watch::Sender<bool>,
     notifications_enabled: bool,
+    /// Startup-animation tick (frame index, then fade), or `None` once the splash has finished.
+    splash: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +90,10 @@ enum Message {
     /// Result of validating + listing repos for the token labelled `String`.
     PatValidated(String, Result<(User, Vec<Repo>), String>),
     RemovePat(String),
+    BeginRename(String),
+    RenameInputChanged(String),
+    CommitRename,
+    CancelRename,
     ToggleRepo(String),
     PollEvent(ChangeEvent),
     CorrectCategory(PrId, CategoryKind),
@@ -92,6 +104,7 @@ enum Message {
     FocusChanged(bool),
     SetNotifications(bool),
     SelectSkin(String),
+    SplashTick,
 }
 
 impl Alurtmee {
@@ -121,6 +134,12 @@ impl Alurtmee {
             for event in demo::demo_events() {
                 pr_list.apply(event);
             }
+        } else {
+            // Hydrate the feed from the persisted snapshot so a restart shows the current PRs
+            // immediately. The poller is event-sourced from diffs, and an unchanged repo answers a
+            // poll with 304 (no events), so without this the feed would be empty until something
+            // actually changes — even though the cache holds every open PR.
+            hydrate_feed(&store, &selection, &mut pr_list);
         }
         let selected = pr_list.prs().first().map(|pr| pr.id.clone());
 
@@ -165,6 +184,7 @@ impl Alurtmee {
             dispatcher: NotificationDispatcher::new(XdgNotifier),
             focus_tx,
             notifications_enabled,
+            splash: Some(0),
         };
         (app, boot_task)
     }
@@ -235,6 +255,29 @@ impl Alurtmee {
                 persist_pats(&self.store, &self.model);
                 Task::none()
             }
+            Message::BeginRename(label) => {
+                self.model.begin_rename(&label);
+                Task::none()
+            }
+            Message::RenameInputChanged(value) => {
+                self.model.rename_input_changed(value);
+                Task::none()
+            }
+            Message::CancelRename => {
+                self.model.cancel_rename();
+                Task::none()
+            }
+            Message::CommitRename => {
+                if let Some((old, new)) = self.model.commit_rename() {
+                    // Move the secret to the new keychain account, then drop the old one.
+                    if let Ok(Some(token)) = self.keychain.get_token(&old) {
+                        let _ = self.keychain.set_token(&new, &token);
+                        let _ = self.keychain.delete_token(&old);
+                    }
+                    persist_pats(&self.store, &self.model);
+                }
+                Task::none()
+            }
             Message::ToggleRepo(full_name) => {
                 let selection = self.model.toggle_repo(&full_name).clone();
                 if let Err(err) = self.store.save_selection(&selection) {
@@ -246,6 +289,13 @@ impl Alurtmee {
                 if self.notifications_enabled {
                     if let ChangeEvent::CiAlert(alert) = &event {
                         self.dispatcher.dispatch(alert);
+                    }
+                }
+                // Persist the classification verdict so the feed's tags survive a restart (the
+                // poller stores PRs + enrichment itself, but emits classification only as an event).
+                if let ChangeEvent::Classified(classification) = &event {
+                    if let Err(err) = self.store.save_classification(classification) {
+                        tracing::warn!("failed to persist classification: {err}");
                     }
                 }
                 self.pr_list.apply(event);
@@ -302,6 +352,15 @@ impl Alurtmee {
                 }
                 Task::none()
             }
+            Message::SplashTick => {
+                // Advance through the frames, then the fade ticks; clear once both are done.
+                let total = splash_frames::FRAMES.len() + SPLASH_FADE_TICKS;
+                self.splash = match self.splash {
+                    Some(tick) if tick + 1 < total => Some(tick + 1),
+                    _ => None,
+                };
+                Task::none()
+            }
         }
     }
 
@@ -314,18 +373,27 @@ impl Alurtmee {
             _ => None,
         });
 
+        // App "chrome" subscriptions that run regardless of auth: window focus, and (while it lasts)
+        // the splash-animation frame timer.
+        let mut subscriptions = vec![focus];
+        if self.splash.is_some() {
+            subscriptions.push(
+                iced::time::every(Duration::from_millis(SPLASH_TICK_MS))
+                    .map(|_| Message::SplashTick),
+            );
+        }
+
         if !self.model.has_any_auth() {
-            return focus;
+            return Subscription::batch(subscriptions);
         }
         // Each watched repo is assigned to exactly one token, so we run one poller per token over a
         // disjoint repo set — a repo (and its PRs) is never polled twice even when several tokens
         // can see it.
         let assignments = self.model.poll_assignments();
         if assignments.is_empty() {
-            return focus;
+            return Subscription::batch(subscriptions);
         }
 
-        let mut subscriptions = vec![focus];
         for (label, repos) in assignments {
             let base_url = self.base_url.clone();
             let focus_rx = self.focus_tx.subscribe();
@@ -414,6 +482,31 @@ fn validate_and_list_task(label: String, client: GhClient) -> Task<Message> {
         },
         move |result| Message::PatValidated(label.clone(), result),
     )
+}
+
+/// Populate `pr_list` from the cached open-PR snapshot (and enrichment) for each watched repo, so
+/// the feed reflects the persisted state on launch rather than waiting for a poll diff. Per-PR
+/// classification is recomputed by the poller on the next change, so it fills in over time.
+fn hydrate_feed(store: &Store, selection: &domain::RepoSelection, pr_list: &mut PrListModel) {
+    for repo in selection.iter() {
+        let prs = match store.load_repo_prs(repo) {
+            Ok(prs) => prs,
+            Err(err) => {
+                tracing::warn!("could not hydrate {repo} from cache: {err}");
+                continue;
+            }
+        };
+        for pr in prs {
+            let id = pr.id.clone();
+            pr_list.apply(ChangeEvent::Added(pr));
+            if let Ok(Some(enrichment)) = store.load_enrichment(&id) {
+                pr_list.apply(ChangeEvent::Enriched(enrichment));
+            }
+            if let Ok(Some(classification)) = store.load_classification(&id) {
+                pr_list.apply(ChangeEvent::Classified(classification));
+            }
+        }
+    }
 }
 
 /// Load the persisted `(label, login)` pairs for configured tokens from the config DB.

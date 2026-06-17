@@ -530,7 +530,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, migration::SCHEMA_VERSION);
     }
 
     #[test]
@@ -563,6 +563,54 @@ mod tests {
             )
             .expect("read category text");
         assert_eq!(text, "\"feature\"");
+    }
+
+    #[test]
+    fn classification_round_trip_and_absent_is_none() {
+        let store = Store::open_in_memory().expect("open store");
+        let id = domain::PrId::new("octocat/hello", 7);
+
+        assert_eq!(
+            store.load_classification(&id).expect("load absent"),
+            None,
+            "never-classified PR is None"
+        );
+
+        let classification = domain::Classification {
+            id: id.clone(),
+            author_kind: domain::AuthorKind::Bot,
+            category: domain::Category {
+                kind: domain::CategoryKind::Security,
+                confidence: 0.9,
+                signal: "dependabot".to_string(),
+            },
+        };
+        store
+            .save_classification(&classification)
+            .expect("save classification");
+        assert_eq!(
+            store.load_classification(&id).expect("load classification"),
+            Some(classification.clone())
+        );
+
+        // Upsert: re-saving a changed verdict overwrites in place.
+        let corrected = domain::Classification {
+            category: domain::Category {
+                kind: domain::CategoryKind::Feature,
+                ..classification.category.clone()
+            },
+            ..classification
+        };
+        store.save_classification(&corrected).expect("re-save");
+        assert_eq!(
+            store
+                .load_classification(&id)
+                .expect("load")
+                .unwrap()
+                .category
+                .kind,
+            domain::CategoryKind::Feature
+        );
     }
 
     #[test]
@@ -770,7 +818,7 @@ mod tests {
             .connection()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, migration::SCHEMA_VERSION);
     }
 
     #[test]

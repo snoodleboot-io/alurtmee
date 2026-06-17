@@ -20,4 +20,8 @@ pub struct Repo {
     pub full_name: String,
     /// Whether the repository is private (affects required token scope).
     pub private: bool,
+    /// Whether the owner is an organization (GitHub owner `type == "Organization"`), as opposed to a
+    /// personal user account. Lets ownership decisions trust GitHub's own classification rather than
+    /// guessing from the login.
+    pub owner_is_org: bool,
 }

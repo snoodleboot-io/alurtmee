@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-21
+**Next free ID:** ALRT-22
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|
@@ -26,3 +26,4 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-18 | Ownership rule: org/collaborator access trumps personal account when assigning a shared repo to a poller | `feat/ALRT-18-org-trumps-personal` | Merged |
 | ALRT-19 | Fix wedged polling (v6 backfill + v7 etag reset, etag-after-cache), capture repo owner type, rename tokens; feed hydration + classification persistence + startup animation | `feat/ALRT-19-token-rename-owner-type` | In Review |
 | ALRT-20 | Release pipeline — VERSION file, label-gated semver (release/:major/:patch), auto-bump on PR branch, .deb+AppImage+SHA256SUMS+provenance, branch protection | `feat/ALRT-20-release-pipeline` | Merged |
+| ALRT-21 | Add CHANGELOG.md + CONTRIBUTING.md (clickable PR links); slim README Contributing | `feat/ALRT-21-changelog-contributing` | In Review |

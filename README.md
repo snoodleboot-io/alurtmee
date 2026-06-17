@@ -134,20 +134,9 @@ A couple of environment variables you might use:
 ## Contributing
 
 Bug reports and ideas are welcome via [issues](https://github.com/snoodleboot-io/alurtmee/issues).
-It's a Rust workspace — `cargo test --workspace` runs the suite.
-
-**Releases are label-driven.** The version lives in the [`VERSION`](VERSION) file (semantic
-versioning). Add a label to a PR and the version is bumped automatically on its own branch; merging
-it then builds the `.deb` + AppImage and publishes a GitHub Release — no manual tags.
-
-| Label | Bump | Example |
-|-------|------|---------|
-| `release` | minor | `0.3.0` → `0.4.0` |
-| `release:major` | major | `0.4.0` → `1.0.0` |
-| `release:patch` | patch | `0.4.0` → `0.4.1` |
-
-A PR with no release label merges without cutting a release. `main` is protected (changes land via
-PR), so the bump is committed to the PR branch — never pushed to `main` directly.
+It's a Rust workspace — `cargo test --workspace` runs the suite. See
+[**CONTRIBUTING.md**](CONTRIBUTING.md) for the dev setup, conventions, and the label-driven release
+flow, and [**CHANGELOG.md**](CHANGELOG.md) for what's changed.
 
 ## License
 

@@ -32,6 +32,7 @@ jobs:
             libx11-dev \
             libgl1-mesa-dev \
             mesa-vulkan-drivers \
+            libdbus-1-dev \
             xvfb \
             gnome-keyring \
             dbus-x11

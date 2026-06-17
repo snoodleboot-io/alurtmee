@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Alurtmee
+GenericName=Pull Request Watcher
+Comment=A calm desktop app for keeping an eye on your GitHub pull requests
+Exec=alurtmee
+Icon=alurtmee
+Terminal=false
+Categories=Development;Utility;
+Keywords=GitHub;pull request;PR;CI;
+StartupNotify=true

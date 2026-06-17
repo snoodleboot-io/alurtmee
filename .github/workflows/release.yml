@@ -1,46 +1,55 @@
-# Release workflow for Alurtmee.
+# Release workflow for Alurtmee — versioned by a file, not by hand-made tags.
 #
-# Trigger: push a tag like `v0.1.0` (the version should match `workspace.package.version`).
-# It builds a release binary, packages a `.deb` and an AppImage, writes SHA256SUMS, attaches a
-# signed build-provenance attestation, and publishes a GitHub Release with all assets.
+# `VERSION` (repo root) is the source of truth. Every push to `main` (i.e. every merge) bumps the
+# **minor** version, builds a release binary, packages a `.deb` and an AppImage, writes SHA256SUMS,
+# attaches a signed build-provenance attestation, and publishes a GitHub Release. CI creates the
+# `vX.Y.0` tag for you — you never run `git tag`.
 #
-# Security: artifacts are built in CI (not on a laptop), served over HTTPS by GitHub Releases, and
-# carry a verifiable provenance attestation — `gh attestation verify <file> --repo <owner>/<repo>`.
+# To jump a major (or set an explicit version), edit `VERSION` in a PR; the next merge bumps the
+# minor from whatever it says.
+#
+# Loop-safety: the version-bump commit is pushed with `GITHUB_TOKEN`, and GitHub does not start new
+# workflow runs from `GITHUB_TOKEN` pushes — so the release does not re-trigger itself. The `if`
+# guard is a belt-and-suspenders backup.
 name: release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
 permissions:
-  contents: write # create the release + upload assets
+  contents: write # push the bump commit + create the release
   id-token: write # OIDC token for provenance attestation
   attestations: write # write the attestation
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Derive version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compute next minor version
+        run: |
+          cur="$(cat VERSION)"
+          IFS=. read -r MAJ MIN _ <<< "$cur"
+          next="${MAJ}.$((MIN + 1)).0"
+          echo "VERSION=$next" >> "$GITHUB_ENV"
+          echo "Releasing v$next (current VERSION file: $cur)"
 
       - name: Install system deps (Iced build + packaging)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libxkbcommon-x11-dev \
-            libx11-dev \
-            libgl1-mesa-dev \
-            mesa-vulkan-drivers \
-            gnome-keyring \
-            dbus-x11 \
-            file
+            libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
+            libgl1-mesa-dev mesa-vulkan-drivers gnome-keyring dbus-x11 file
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,17 +57,20 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Apply new version to the version files
+        run: |
+          echo "$VERSION" > VERSION
+          # Replace the first `version = "..."` (the [workspace.package] one) only.
+          sed -i "0,/^version = / s/^version = .*/version = \"$VERSION\"/" Cargo.toml
+
       - name: Build release binary
         run: cargo build --release -p app --bin alurtmee
-
-      - name: Prepare dist
-        run: mkdir -p dist
 
       - name: Package .deb
         run: |
           cargo install cargo-deb --locked
           cargo deb -p app --no-build
-          cp target/debian/*.deb dist/
+          mkdir -p dist && cp target/debian/*.deb dist/
 
       - name: Package AppImage
         env:
@@ -74,13 +86,23 @@ jobs:
             --desktop-file packaging/alurtmee.desktop \
             --icon-file alurtmee.png \
             --output appimage
-          mv Alurtmee-*-x86_64.AppImage dist/ 2>/dev/null || mv ./*.AppImage dist/
+          mv ./*.AppImage dist/
 
       - name: Generate SHA256SUMS
         run: |
           cd dist
           sha256sum ./*.AppImage ./*.deb > SHA256SUMS
           cat SHA256SUMS
+
+      # Only after a successful build+package do we consume the version: commit the bump back to
+      # main, then publish. A failure above leaves VERSION untouched so the next merge retries it.
+      - name: Commit version bump to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION Cargo.toml Cargo.lock
+          git commit -m "chore(release): v$VERSION"
+          git push origin HEAD:main
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v1
@@ -92,6 +114,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          target_commitish: main
           files: |
             dist/*.AppImage
             dist/*.deb

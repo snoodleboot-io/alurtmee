@@ -136,6 +136,11 @@ A couple of environment variables you might use:
 Bug reports and ideas are welcome via [issues](https://github.com/snoodleboot-io/alurtmee/issues).
 It's a Rust workspace — `cargo test --workspace` runs the suite.
 
+**Releases are automatic.** The version lives in the [`VERSION`](VERSION) file (semantic versioning).
+Every merge to `main` bumps the **minor** version, builds the `.deb` + AppImage, and publishes a
+GitHub Release — no manual tags. To jump a major (or set an explicit version), edit `VERSION` in your
+PR; the next merge bumps the minor from there.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

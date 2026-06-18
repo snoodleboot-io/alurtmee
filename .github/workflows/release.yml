@@ -11,6 +11,9 @@ name: release
 on:
   pull_request:
     types: [closed]
+  # Manual re-release: rebuild and publish the version currently on the dispatched
+  # ref (default: main's VERSION) without a labelled PR — e.g. to redo a release.
+  workflow_dispatch: {}
 
 permissions:
   contents: write # create the release + tag
@@ -24,16 +27,18 @@ concurrency:
 jobs:
   release:
     if: >-
-      github.event.pull_request.merged == true && (
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true && (
       contains(github.event.pull_request.labels.*.name, 'release') ||
       contains(github.event.pull_request.labels.*.name, 'release:major') ||
-      contains(github.event.pull_request.labels.*.name, 'release:patch'))
+      contains(github.event.pull_request.labels.*.name, 'release:patch')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the merge commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          # PR-merge event: the merge commit. Manual dispatch: the dispatched ref's HEAD.
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
 
       - name: Read version
@@ -78,7 +83,10 @@ jobs:
             --desktop-file packaging/alurtmee.desktop \
             --icon-file alurtmee.png \
             --output appimage
-          mv ./*.AppImage dist/
+          # Move ONLY the built app image (named via $OUTPUT). A bare ./*.AppImage glob
+          # would also sweep in linuxdeploy-x86_64.AppImage, the packaging tool downloaded
+          # above, leaking it into the release and SHA256SUMS.
+          mv "$OUTPUT" dist/
 
       - name: Generate SHA256SUMS
         run: |
@@ -98,7 +106,7 @@ jobs:
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
-          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           files: |
             dist/*.AppImage
             dist/*.deb

@@ -12,9 +12,12 @@ license.workspace = true
 domain = { path = "../domain" }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
-# Enable the synchronous Linux Secret Service backend with a pure-Rust crypto impl. Features are
-# additive (not a version re-pin); the workspace pins the keyring v3 line in [workspace.dependencies].
-keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
+# Linux Secret Service backend over the pure-Rust `zbus` D-Bus stack (not the C `libdbus`): the
+# `async-secret-service` store driven by the already-present `async-io` executor, with pure-Rust
+# crypto. This keeps the binary free of any C/copyleft-dual D-Bus linkage — the only native libs we
+# link are the permissive GUI/GPU stack. keyring's `Entry` API stays synchronous; the async backend
+# is blocked on internally. Features are additive; the workspace pins the keyring v3 line.
+keyring = { workspace = true, features = ["async-secret-service", "async-io", "crypto-rust"] }
 serde_json = { workspace = true }
 
 [lints]

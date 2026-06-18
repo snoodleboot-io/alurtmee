@@ -316,12 +316,17 @@ impl Alurtmee {
                 .size(21)
                 .color(s.text)
                 .font(FONT_SEMIBOLD),
-            text(format!(
-                "{}#{}  ·  @{}",
-                pr.id.repo, pr.id.number, pr.author
-            ))
-            .size(13)
-            .color(s.muted),
+            row![
+                text(format!(
+                    "{}#{}  ·  @{}",
+                    pr.id.repo, pr.id.number, pr.author
+                ))
+                .size(13)
+                .color(s.muted),
+                horizontal_space(),
+                ghost_button(s, "Open on GitHub ↗", Message::OpenUrl(pr.url.clone())),
+            ]
+            .align_y(Alignment::Center),
         ]
         .spacing(6);
 

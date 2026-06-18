@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Download Alurtmee — current &amp; previous versions</title>
+  <meta name="description" content="Download Alurtmee for Linux — AppImage or .deb. Always shows the current release plus the last four versions, pulled live from GitHub." />
+  <meta name="theme-color" content="#030208" />
+  <link rel="icon" type="image/png" href="assets/img/logo-128.png" />
+  <link rel="apple-touch-icon" href="assets/img/logo-128.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Download Alurtmee" />
+  <meta property="og:description" content="Grab the current release plus the last four versions — AppImage or .deb, for Linux." />
+  <meta property="og:image" content="assets/img/logo.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.github.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+  <script src="assets/js/main.js" defer></script>
+  <script src="assets/js/downloads.js" defer></script>
+</head>
+<body>
+  <div class="cosmos" aria-hidden="true"></div>
+  <canvas class="stars" aria-hidden="true"></canvas>
+
+  <!-- ============ NAV ============ -->
+  <header class="nav">
+    <a class="brand" href="index.html" aria-label="Alurtmee home">
+      <img src="assets/img/logo-128.png" alt="" />
+      <span>Alurtmee</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#showcase">See it</a>
+      <a href="index.html#themes">Themes</a>
+      <a href="index.html#privacy">Privacy</a>
+      <a href="downloads.html" aria-current="page">Downloads</a>
+    </nav>
+    <div class="nav-actions">
+      <details class="theme-switch">
+        <summary aria-label="Switch theme">
+          <span class="swatch" aria-hidden="true"></span>
+          <span data-theme-label>Nebula</span>
+        </summary>
+        <div class="theme-menu" role="menu" aria-label="Theme">
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="nebula"><span class="dot" style="background:#030208"></span><span class="name">Nebula</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="aurora"><span class="dot" style="background:#080b0b"></span><span class="name">Aurora</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="velvet"><span class="dot" style="background:#0a080e"></span><span class="name">Velvet</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="synthwave"><span class="dot" style="background:#0a0710"></span><span class="name">Synthwave</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="voltage"><span class="dot" style="background:#020301"></span><span class="name">Voltage</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="ionix"><span class="dot" style="background:#03050b"></span><span class="name">Ionix</span><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></button>
+        </div>
+      </details>
+      <a class="btn btn-primary hide-sm" href="https://github.com/snoodleboot-io/alurtmee" target="_blank" rel="noopener">GitHub</a>
+      <button class="nav-toggle" aria-label="Menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="dl-hero wrap">
+      <span class="eyebrow" style="justify-content:center">Downloads</span>
+      <h1>Grab <span class="gradient-text">Alurtmee</span>.</h1>
+      <p class="lede" style="margin-inline:auto">Runs on <b>Linux</b> today — macOS and Windows are planned. The list below is pulled live from GitHub, so it always shows the current release and the last four.</p>
+
+      <!-- Current release (filled by downloads.js) -->
+      <div class="dl-latest" id="dl-latest" aria-live="polite">
+        <div style="padding:1.6rem;display:grid;gap:1rem">
+          <div class="dl-skeleton" style="height:34px;width:240px"></div>
+          <div class="dl-skeleton"></div>
+        </div>
+      </div>
+
+      <!-- Requirements + verify -->
+      <div class="dl-note">
+        <strong style="color:var(--text)">Before you run it:</strong>
+        Alurtmee renders with your GPU and stores your token in the system keychain, so you'll need
+        GPU drivers (<code>mesa-vulkan-drivers</code>) and a Secret Service daemon (<code>gnome-keyring</code>) present.
+        The <strong style="color:var(--text)">AppImage</strong> needs no install — <code>chmod +x</code> and run.
+        The <strong style="color:var(--text)">.deb</strong> pulls in its runtime dependencies via
+        <code>sudo apt install ./alurtmee_*_amd64.deb</code>.
+        First look? Launch with <code>ALURTMEE_DEMO=1</code> for sample data and no network.
+      </div>
+    </section>
+
+    <!-- All versions list -->
+    <section class="wrap" style="padding-top:0">
+      <div class="dl-list" id="dl-list" aria-live="polite">
+        <div class="dl-skeleton"></div>
+        <div class="dl-skeleton"></div>
+        <div class="dl-skeleton"></div>
+      </div>
+
+      <div class="dl-note">
+        <strong style="color:var(--text)">Verify any download.</strong>
+        Every release ships a <code>SHA256SUMS</code> file and a signed build-provenance attestation:
+        <code>sha256sum -c SHA256SUMS</code> checks integrity, and
+        <code>gh attestation verify Alurtmee.AppImage --repo snoodleboot-io/alurtmee</code>
+        confirms this repo's CI built it.
+        Looking for something older than the last five?
+        <a href="https://github.com/snoodleboot-io/alurtmee/releases" target="_blank" rel="noopener" style="color:var(--accent-2)">Every release lives on GitHub →</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="foot-brand">
+          <a class="brand" href="index.html"><img src="assets/img/logo-128.png" alt="" /><span>Alurtmee</span></a>
+          <p>A calm desktop app for keeping an eye on your GitHub pull requests. Built in Rust. Apache-2.0.</p>
+        </div>
+        <div class="foot-col">
+          <h4>Product</h4>
+          <a href="index.html#features">Features</a>
+          <a href="index.html#showcase">See it in action</a>
+          <a href="index.html#themes">Themes</a>
+          <a href="downloads.html">Downloads</a>
+        </div>
+        <div class="foot-col">
+          <h4>Project</h4>
+          <a href="https://github.com/snoodleboot-io/alurtmee" target="_blank" rel="noopener">GitHub repo</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/issues" target="_blank" rel="noopener">Report an issue</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+        </div>
+        <div class="foot-col">
+          <h4>Get started</h4>
+          <a href="https://github.com/snoodleboot-io/alurtmee#installing" target="_blank" rel="noopener">Install guide</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee#getting-connected" target="_blank" rel="noopener">Connect a token</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee#option-c--build-from-source" target="_blank" rel="noopener">Build from source</a>
+        </div>
+      </div>
+      <div class="foot-bottom">
+        <span>© <span data-year>2026</span> Alurtmee · Apache-2.0</span>
+        <span>Runs on Linux today · macOS &amp; Windows planned</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

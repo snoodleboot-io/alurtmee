@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alurtmee — calm watch over your GitHub pull requests</title>
+  <meta name="description" content="Alurtmee is a calm desktop app that keeps an eye on your GitHub pull requests — open PRs, reviews, CI status — and taps you on the shoulder only when something needs you." />
+  <meta name="theme-color" content="#030208" />
+  <link rel="icon" type="image/png" href="assets/img/logo-128.png" />
+  <link rel="apple-touch-icon" href="assets/img/logo-128.png" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Alurtmee — calm watch over your GitHub pull requests" />
+  <meta property="og:description" content="See every open PR, who's behind it, and whether CI is passing — in one quiet window. Get nudged only when a build fails or a workflow drags." />
+  <meta property="og:image" content="assets/img/logo.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+  <script src="assets/js/main.js" defer></script>
+</head>
+<body>
+  <div class="cosmos" aria-hidden="true"></div>
+  <canvas class="stars" aria-hidden="true"></canvas>
+
+  <!-- ============ NAV ============ -->
+  <header class="nav">
+    <a class="brand" href="index.html" aria-label="Alurtmee home">
+      <img src="assets/img/logo-128.png" alt="" />
+      <span>Alurtmee</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#showcase">See it</a>
+      <a href="#themes">Themes</a>
+      <a href="#privacy">Privacy</a>
+      <a href="downloads.html">Downloads</a>
+    </nav>
+    <div class="nav-actions">
+      <details class="theme-switch">
+        <summary aria-label="Switch theme">
+          <span class="swatch" aria-hidden="true"></span>
+          <span data-theme-label>Nebula</span>
+        </summary>
+        <div class="theme-menu" role="menu" aria-label="Theme">
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="nebula" style="--accent:#a838ff;--accent-2:#21e6ff">
+            <span class="dot" style="background:#030208"><span style="--c:#21e6ff"></span></span><span class="name">Nebula</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="aurora">
+            <span class="dot" style="background:#080b0b"></span><span class="name">Aurora</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="velvet">
+            <span class="dot" style="background:#0a080e"></span><span class="name">Velvet</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="synthwave">
+            <span class="dot" style="background:#0a0710"></span><span class="name">Synthwave</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="voltage">
+            <span class="dot" style="background:#020301"></span><span class="name">Voltage</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+          <button class="theme-opt" role="menuitemradio" data-theme-opt="ionix">
+            <span class="dot" style="background:#03050b"></span><span class="name">Ionix</span>
+            <svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </button>
+        </div>
+      </details>
+      <a class="btn btn-primary hide-sm" href="downloads.html">Download</a>
+      <button class="nav-toggle" aria-label="Menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ HERO ============ -->
+    <section class="hero wrap">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <span class="pill reveal in"><span class="dot-live"></span> Quietly watching your PRs</span>
+          <h1>Your pull requests, <span class="gradient-text">calmly handled</span>.</h1>
+          <p class="lede">Alurtmee is a desktop companion that watches the repositories you care about — every open PR, who's behind it, whether CI is green — and taps you on the shoulder only when something actually needs you.</p>
+          <div class="hero-cta">
+            <a class="btn btn-primary btn-lg" href="downloads.html">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M5 21h14"/></svg>
+              Download for Linux
+            </a>
+            <a class="btn btn-ghost btn-lg" href="https://github.com/snoodleboot-io/alurtmee" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5Z"/></svg>
+              Star on GitHub
+            </a>
+          </div>
+          <div class="hero-meta">
+            <span class="ok"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Token stays in your keychain</span>
+            <span class="ok"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Light on CPU &amp; battery</span>
+            <span class="ok"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Free &amp; open source</span>
+          </div>
+        </div>
+
+        <div class="orb-stage" aria-hidden="true">
+          <div class="orb-ring r3"></div>
+          <div class="orb-ring r2"></div>
+          <img class="orb" src="assets/img/logo.png" alt="" width="600" height="600" />
+          <span class="orb-chip c1"><span class="s s-green"></span> CI passing</span>
+          <span class="orb-chip c2"><span class="s s-gold"></span> workflow slow</span>
+          <span class="orb-chip c3"><span class="s s-red"></span> build failed</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TRUST STRIP ============ -->
+    <div class="trust">
+      <div class="wrap trust-row">
+        <span><b>One window</b> for every repo you watch</span><span class="sep"></span>
+        <span><b>Human or bot</b>, feature or security — tagged</span><span class="sep"></span>
+        <span><b>Desktop alerts</b> only when it matters</span><span class="sep"></span>
+        <span><b>Six</b> hand-built dark themes</span>
+      </div>
+    </div>
+
+    <!-- ============ FEATURES (bento) ============ -->
+    <section id="features" class="wrap">
+      <div class="head reveal">
+        <span class="eyebrow">What it does</span>
+        <h2 class="section-title">Everything in flight, <span class="gradient-text">nothing in your face</span>.</h2>
+        <p class="lede">Point Alurtmee at the repositories you care about. It does the watching so you can do the work.</p>
+      </div>
+
+      <div class="bento">
+        <!-- Big feature card with PR mock -->
+        <article class="card span-4 reveal">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+          </div>
+          <h3>All your pull requests in one window</h3>
+          <p>Open PRs across the repos you pick — each with its reviews, comment threads and test status. A glance tells you what's green, what's stuck, and what's yours.</p>
+          <div class="pr-mock">
+            <div class="pr-row">
+              <span class="ci s-green"></span>
+              <span><span class="t">Add retry budget to poller</span><br><span class="by">octocat · 2 reviews</span></span>
+              <span class="kind">feature</span>
+            </div>
+            <div class="pr-row sec">
+              <span class="ci s-gold"></span>
+              <span><span class="t">Bump openssl to patch CVE</span><br><span class="by">dependabot · running</span></span>
+              <span class="kind" style="color:var(--gold);border-color:color-mix(in srgb,var(--gold) 45%,transparent)">security</span>
+            </div>
+            <div class="pr-row">
+              <span class="ci s-red"></span>
+              <span><span class="t">Refactor theme registry</span><br><span class="by">you · CI failing</span></span>
+              <span class="kind">feature</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- Tagging -->
+        <article class="card span-2 reveal" data-d="1">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 12 22l-9-9V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
+          </div>
+          <h3>Know what you're looking at</h3>
+          <p>Every PR is tagged <b>human or bot</b> and <b>feature or security</b>, with security changes highlighted. Got one wrong? Fix it in a click and it sticks.</p>
+          <div class="taglist">
+            <span class="tag human">● human</span>
+            <span class="tag bot">● bot</span>
+            <span class="tag">feature</span>
+            <span class="tag sec">security</span>
+          </div>
+        </article>
+
+        <!-- Alerts -->
+        <article class="card span-3 reveal">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/><path d="M21 19H3l1.6-2.6A8 8 0 0 0 6 11a6 6 0 0 1 12 0 8 8 0 0 0 1.4 5.4Z"/></svg>
+          </div>
+          <h3>Catch trouble early</h3>
+          <p>A desktop notification the moment CI <b style="color:var(--red)">fails</b> — or a workflow runs <b style="color:var(--gold)">slower than its usual time</b>. You won't be the last to find out, and you won't have to keep checking.</p>
+        </article>
+
+        <!-- Filters -->
+        <article class="card span-3 reveal" data-d="1">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16l-6 8v6l-4 2v-8L4 4Z"/></svg>
+          </div>
+          <h3>Cut the noise</h3>
+          <p>One-click filter chips — <i>just bots</i>, <i>just security</i>, and more — narrow the feed to exactly the slice you want to see right now.</p>
+          <div class="taglist">
+            <span class="tag">just bots</span>
+            <span class="tag sec">just security</span>
+            <span class="tag human">just people</span>
+            <span class="tag">failing CI</span>
+          </div>
+        </article>
+
+        <!-- Themes -->
+        <article class="card span-3 reveal">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="11.5" r="2.5"/><circle cx="17.5" cy="13.5" r="2.5"/><path d="M12 22a10 10 0 1 1 0-20c4 0 5 2.5 4 5"/></svg>
+          </div>
+          <h3>Make it yours</h3>
+          <p>Six hand-built dark themes — Nebula, Aurora, Velvet, Synthwave, Voltage, Ionix — switchable on the fly. <a href="#themes" style="color:var(--accent-2)">Try them on this page →</a></p>
+        </article>
+
+        <!-- Privacy -->
+        <article class="card span-3 reveal" data-d="1">
+          <div class="ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5-1.5 8-4 8-9V5l-8-3-8 3v8c0 5 3 7.5 8 9Z"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <h3>Light and private</h3>
+          <p>Easy on CPU and battery — it polls less when the window isn't focused. Your access token is stored <b>only in your system keychain</b>: never on disk, never in a log.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ SHOWCASE (video) ============ -->
+    <section id="showcase" class="wrap">
+      <div class="showcase-grid">
+        <div class="video-frame reveal">
+          <div class="bar"><i></i><i></i><i></i></div>
+          <video src="assets/video/orb.mp4" poster="assets/img/orb-poster.jpg" autoplay muted loop playsinline></video>
+        </div>
+        <div class="reveal" data-d="1">
+          <span class="eyebrow">Meet Alurtmee</span>
+          <h2 class="section-title">A companion, not a dashboard.</h2>
+          <p class="lede" style="margin-bottom:2rem">Alurtmee is the name of the mascot, too — the glowing orb that keeps watch. The rest of the time it stays quiet and out of the way.</p>
+          <div class="facts">
+            <div class="fact">
+              <span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+              <div><h3>Always current</h3><p>Polls in the background and resumes automatically next launch — no re-entry, no babysitting.</p></div>
+            </div>
+            <div class="fact">
+              <span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
+              <div><h3>Two-pane feed</h3><p>Your PRs on the left; click one to see its full detail — reviews, CI dots, security edge — on the right.</p></div>
+            </div>
+            <div class="fact">
+              <span class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>
+              <div><h3>GPU-rendered, native</h3><p>A real desktop app built in Rust — fast, lightweight, and crisp on your display.</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ HOW IT WORKS ============ -->
+    <section id="how" class="wrap">
+      <div class="head reveal">
+        <span class="eyebrow">Getting connected</span>
+        <h2 class="section-title">Set it up once. <span class="gradient-text">Then forget it's there.</span></h2>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <h3>Add a token</h3>
+          <p>Create a GitHub personal access token with read access and paste it into Settings. It's saved straight to your system keychain — add as many as you need (personal, work, org).</p>
+        </div>
+        <div class="step reveal" data-d="1">
+          <h3>Pick your repos</h3>
+          <p>Tick the repositories you'd like to keep an eye on. The repos all your tokens can see combine into one list — a repo visible to more than one token still appears once.</p>
+        </div>
+        <div class="step reveal" data-d="2">
+          <h3>Get on with your day</h3>
+          <p>Head back to the feed and it fills in. From here it watches quietly, reconnecting and resuming on every launch — and nudges you only when a build breaks or drags.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ THEMES ============ -->
+    <section id="themes" class="wrap">
+      <div class="head center reveal">
+        <span class="eyebrow">Six skins, one orb</span>
+        <h2 class="section-title">Repaint the whole thing.</h2>
+        <p class="lede" style="margin-inline:auto">These are the app's real themes, pulled from the source. Tap one — this entire site changes with it.</p>
+      </div>
+      <div class="theme-gallery">
+        <!-- Each card carries its palette via inline custom props -->
+        <button class="theme-card reveal" data-theme-card="nebula" aria-pressed="true" style="--tc-accent:#a838ff;--tc-accent2:#21e6ff;--tc-bg:#030208;--tc-text:#f4eefc">
+          <div class="theme-preview" style="background:#030208">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Nebula</b><span class="dots"><i style="background:#a838ff"></i><i style="background:#21e6ff"></i></span></div>
+        </button>
+        <button class="theme-card reveal" data-d="1" data-theme-card="ionix" style="--tc-accent:#28ecff;--tc-accent2:#b14dff;--tc-bg:#03050b;--tc-text:#e9f2fb">
+          <div class="theme-preview" style="background:#03050b">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Ionix</b><span class="dots"><i style="background:#28ecff"></i><i style="background:#b14dff"></i></span></div>
+        </button>
+        <button class="theme-card reveal" data-d="2" data-theme-card="synthwave" style="--tc-accent:#ff45e0;--tc-accent2:#2ad4ff;--tc-bg:#0a0710;--tc-text:#f6eef7">
+          <div class="theme-preview" style="background:#0a0710">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Synthwave</b><span class="dots"><i style="background:#ff45e0"></i><i style="background:#2ad4ff"></i></span></div>
+        </button>
+        <button class="theme-card reveal" data-theme-card="velvet" style="--tc-accent:#cf95ff;--tc-accent2:#ff79d9;--tc-bg:#0a080e;--tc-text:#f1ecf7">
+          <div class="theme-preview" style="background:#0a080e">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Velvet</b><span class="dots"><i style="background:#cf95ff"></i><i style="background:#ff79d9"></i></span></div>
+        </button>
+        <button class="theme-card reveal" data-d="1" data-theme-card="aurora" style="--tc-accent:#2fe0c4;--tc-accent2:#5ad0ff;--tc-bg:#080b0b;--tc-text:#eaf3ef">
+          <div class="theme-preview" style="background:#080b0b">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Aurora</b><span class="dots"><i style="background:#2fe0c4"></i><i style="background:#5ad0ff"></i></span></div>
+        </button>
+        <button class="theme-card reveal" data-d="2" data-theme-card="voltage" style="--tc-accent:#b6ff3a;--tc-accent2:#2ee6c0;--tc-bg:#020301;--tc-text:#eef4e7">
+          <div class="theme-preview" style="background:#020301">
+            <span class="mini-row a"></span><span class="mini-row b"></span><span class="mini-row c"></span><span class="mini-orb"></span>
+          </div>
+          <div class="tmeta"><b>Voltage</b><span class="dots"><i style="background:#b6ff3a"></i><i style="background:#2ee6c0"></i></span></div>
+        </button>
+      </div>
+    </section>
+
+    <!-- ============ PRIVACY ============ -->
+    <section id="privacy" class="wrap">
+      <div class="split">
+        <div class="reveal">
+          <span class="eyebrow">Your data stays yours</span>
+          <h2 class="section-title">Private by design.</h2>
+          <p class="lede" style="margin-bottom:1.8rem">Alurtmee asks for read access, holds your token where the OS keeps secrets, and keeps everything else in a small local database on your machine.</p>
+          <ul class="shield-list">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>Token in the keychain only.</b> Via the system Secret Service — never written to the database, config, or logs.</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>Local cache, local choices.</b> Your repo selection, theme and preferences live in a small DB under your user data directory.</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>Verifiable builds.</b> Every release ships a <code style="font-family:ui-monospace,monospace;color:var(--accent-2)">SHA256SUMS</code> file and a signed build-provenance attestation.</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><b>Open source.</b> Apache-2.0. Read every line, build it yourself, send a patch.</span></li>
+          </ul>
+        </div>
+        <div class="code-card reveal" data-d="1">
+          <div class="bar"><i></i><i></i><i></i><span>verify your download</span></div>
+          <pre><code><span class="c"># confirm the binary is intact…</span>
+<span class="g">$</span> sha256sum -c SHA256SUMS
+
+<span class="c"># …and that this repo's CI built it</span>
+<span class="g">$</span> gh attestation verify Alurtmee.AppImage \
+    <span class="a">--repo</span> snoodleboot-io/alurtmee
+
+<span class="c"># prefer no install? try it with sample data:</span>
+<span class="g">$</span> <span class="k">ALURTMEE_DEMO=1</span> ./Alurtmee.AppImage</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA ============ -->
+    <section class="wrap cta-band">
+      <div class="cta-inner reveal">
+        <h2>Stop refreshing tabs.</h2>
+        <p>Let the orb keep watch. Grab a build and have your pull requests in one calm window in a couple of minutes.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="downloads.html">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M5 21h14"/></svg>
+            Download Alurtmee
+          </a>
+          <a class="btn btn-ghost btn-lg" href="https://github.com/snoodleboot-io/alurtmee" target="_blank" rel="noopener">View the source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ FOOTER ============ -->
+  <footer>
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="foot-brand">
+          <a class="brand" href="index.html"><img src="assets/img/logo-128.png" alt="" /><span>Alurtmee</span></a>
+          <p>A calm desktop app for keeping an eye on your GitHub pull requests. Built in Rust. Apache-2.0.</p>
+        </div>
+        <div class="foot-col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#showcase">See it in action</a>
+          <a href="#themes">Themes</a>
+          <a href="downloads.html">Downloads</a>
+        </div>
+        <div class="foot-col">
+          <h4>Project</h4>
+          <a href="https://github.com/snoodleboot-io/alurtmee" target="_blank" rel="noopener">GitHub repo</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/releases" target="_blank" rel="noopener">Releases</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/issues" target="_blank" rel="noopener">Report an issue</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+        </div>
+        <div class="foot-col">
+          <h4>Get started</h4>
+          <a href="downloads.html">Download for Linux</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee#installing" target="_blank" rel="noopener">Install guide</a>
+          <a href="https://github.com/snoodleboot-io/alurtmee#getting-connected" target="_blank" rel="noopener">Connect a token</a>
+        </div>
+      </div>
+      <div class="foot-bottom">
+        <span>© <span data-year>2026</span> Alurtmee · Apache-2.0</span>
+        <span>Runs on Linux today · macOS &amp; Windows planned</span>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

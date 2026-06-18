@@ -100,6 +100,7 @@ enum Message {
     ToggleSourceFilter(AuthorKind),
     ToggleCategoryFilter(CategoryKind),
     SelectPr(PrId),
+    OpenUrl(String),
     ShowSettings(bool),
     FocusChanged(bool),
     SetNotifications(bool),
@@ -330,6 +331,10 @@ impl Alurtmee {
                 self.selected = Some(id);
                 Task::none()
             }
+            Message::OpenUrl(url) => {
+                open_url(&url);
+                Task::none()
+            }
             Message::ShowSettings(show) => {
                 self.show_settings = show;
                 Task::none()
@@ -444,6 +449,13 @@ impl Alurtmee {
 }
 
 // ---- plumbing -------------------------------------------------------------
+
+/// Open a URL in the user's default browser (fire-and-forget via `xdg-open`).
+fn open_url(url: &str) {
+    if let Err(err) = std::process::Command::new("xdg-open").arg(url).spawn() {
+        tracing::warn!("could not open {url} in a browser: {err}");
+    }
+}
 
 fn open_store() -> Store {
     match open_store_opt() {

@@ -40,7 +40,7 @@ Environment vars:   UPPER_SNAKE_CASE always
 
 ### Testing
 
-Test framework for this project (transcribed from [exec/MASTER §7](../../../planning/current/exec/MASTER.md)):
+Test framework for this project (transcribed from [exec/MASTER §7](../../../planning/complete/exec/MASTER.md)):
 
 - **Unit (TDD):** `#[cfg(test)] mod tests` co-located in each module. Pure `domain` logic gets
   exhaustive **table-driven** tests. HTTP-touching unit tests use **`wiremock`** (a local mock

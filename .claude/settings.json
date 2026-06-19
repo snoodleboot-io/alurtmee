@@ -40,7 +40,22 @@
       "Bash(echo \"ok-suites: $\\(cargo test --workspace 2>&1)",
       "Bash(python3 -c ' *)",
       "Bash(awk '1; /\\\\| ALRT-18 \\\\|/ {print \"| ALRT-19 | Fix wedged polling \\(v6 backfill + v7 etag reset, etag-after-cache\\), capture repo owner type, rename tokens | `feat/ALRT-19-token-rename-owner-type` | In Review |\"}' planning/TICKETS.md)",
-      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\); *)"
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\); *)",
+      "Bash(awk '1; /\\\\| ALRT-21 \\\\|/ {print \"| ALRT-22 | Open a PR on GitHub from the detail pane \\(xdg-open\\) | `feat/ALRT-22-open-pr-link` | In Review |\"}' planning/TICKETS.md)",
+      "Bash(gh release *)",
+      "Bash(awk -F'\\\\t' '{print $1\"/\"$2\"  \"$3\"  \"$4}')",
+      "Bash(python3 -c 'import sys,json *)",
+      "Bash(ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration -of default=noprint_wrappers=1 assets/alurtmee_animation.mp4)",
+      "Bash(ffmpeg -y -ss 4 -i assets/alurtmee_animation.mp4 -frames:v 1 /tmp/mp4_mid.png)",
+      "Bash(node -e \"console.log\\(require\\('puppeteer'\\)?'pup':''\\)\")",
+      "Bash(google-chrome --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1440,2400 --screenshot=/tmp/index.png --virtual-time-budget=4000 http://localhost:8731/index.html)",
+      "Bash(echo \"index exit: $?\")",
+      "Bash(google-chrome --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1440,1600 --screenshot=/tmp/downloads.png --virtual-time-budget=5000 http://localhost:8731/downloads.html)",
+      "Bash(echo \"downloads exit: $?\")",
+      "Bash(ffmpeg -y -ss 4 -i /tmp/orb-h264.mp4 -frames:v 1 /tmp/orb-h264-frame.png)",
+      "Bash(python3 -c \"from PIL import Image; print\\('dims', Image.open\\('/tmp/orb-h264-frame.png'\\).size\\)\")",
+      "Bash(cargo tree *)",
+      "Bash(cargo update *)"
     ]
   }
 }

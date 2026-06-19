@@ -273,7 +273,7 @@ For language-specific rules, see: core-conventions-ts.md, core-conventions-py.md
 
 All mode-specific rules inherit from this file.
 
-> **Note:** The values below were filled in Phase 0 from the [ARD](../../../planning/current/ALRT-1-ARD.md) and **ratified (B8 closed)**.
+> **Note:** The values below were filled in Phase 0 from the [ARD](../../../planning/complete/ALRT-1-ARD.md) and **ratified (B8 closed)**.
 
 ## Repository Structure
 

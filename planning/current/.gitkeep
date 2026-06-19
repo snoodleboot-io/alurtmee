@@ -1,0 +1,4 @@
+# Active planning lives here
+
+In-flight tickets place their PRD/ARD/exec docs in this directory.
+When a release ships, move its planning to `../complete/`. See `../README.md`.

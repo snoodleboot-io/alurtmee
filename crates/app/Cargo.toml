@@ -39,8 +39,8 @@ workspace = true
 # workspace root.
 [package.metadata.deb]
 name = "alurtmee"
-maintainer = "Snoodleboot LLC <john@snoodleboot.com>"
-copyright = "2026 Snoodleboot LLC"
+maintainer = "snoodleboot, LLC <john@snoodleboot.com>"
+copyright = "2026 snoodleboot, LLC"
 license-file = ["../../LICENSE", "0"]
 extended-description = "A calm desktop app for keeping an eye on your GitHub pull requests: open PRs across the repos you pick, with reviews, CI status, classification, and desktop alerts."
 section = "utils"

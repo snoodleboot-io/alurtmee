@@ -14,10 +14,10 @@
   <project_license>Apache-2.0</project_license>
 
   <developer id="com.snoodleboot">
-    <name>Snoodleboot LLC</name>
+    <name>snoodleboot, LLC</name>
   </developer>
   <!-- Legacy fallback for older AppStream readers. -->
-  <developer_name>Snoodleboot LLC</developer_name>
+  <developer_name>snoodleboot, LLC</developer_name>
   <update_contact>john_at_snoodleboot.com</update_contact>
 
   <description>

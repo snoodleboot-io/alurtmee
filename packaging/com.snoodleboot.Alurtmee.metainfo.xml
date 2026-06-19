@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: drives how Alurtmee appears in software centres
+     (GNOME Software, KDE Discover, Pop!_Shop, elementary AppCenter) — name,
+     publisher, license, description, screenshots. Installed to
+     /usr/share/metainfo/ by the .deb and bundled into the AppImage. -->
+<component type="desktop-application">
+  <id>com.snoodleboot.Alurtmee</id>
+  <launchable type="desktop-id">com.snoodleboot.Alurtmee.desktop</launchable>
+
+  <name>Alurtmee</name>
+  <summary>A calm watch over your GitHub pull requests</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <developer id="com.snoodleboot">
+    <name>Snoodleboot LLC</name>
+  </developer>
+  <!-- Legacy fallback for older AppStream readers. -->
+  <developer_name>Snoodleboot LLC</developer_name>
+  <update_contact>john_at_snoodleboot.com</update_contact>
+
+  <description>
+    <p>
+      Alurtmee is a desktop companion that keeps an eye on the GitHub repositories you
+      care about. Point it at your repos and it shows — at a glance — which pull
+      requests are open, who's behind them, whether CI is passing, and what needs your
+      attention. When a build fails or a workflow drags, it taps you on the shoulder
+      with a desktop notification. The rest of the time it stays quiet and out of the way.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Every open pull request across the repos you pick, with reviews, comment threads and test status</li>
+      <li>Each PR tagged human or bot and feature or security, with one-click corrections that stick</li>
+      <li>Desktop notifications the moment CI fails or a workflow runs slower than usual</li>
+      <li>One-click filter chips to cut the noise</li>
+      <li>Six hand-built dark themes, switchable on the fly</li>
+      <li>Light and private — your token is stored only in the system keychain</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>Development</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>GitHub</keyword>
+    <keyword>pull request</keyword>
+    <keyword>PR</keyword>
+    <keyword>CI</keyword>
+  </keywords>
+
+  <url type="homepage">https://snoodleboot-io.github.io/alurtmee/</url>
+  <url type="bugtracker">https://github.com/snoodleboot-io/alurtmee/issues</url>
+  <url type="vcs-browser">https://github.com/snoodleboot-io/alurtmee</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://snoodleboot-io.github.io/alurtmee/assets/img/logo.png</image>
+      <caption>The Alurtmee mascot</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-06-18">
+      <description>
+        <p>First release: a calm Linux desktop app for keeping an eye on your GitHub pull requests.</p>
+      </description>
+    </release>
+  </releases>
+</component>

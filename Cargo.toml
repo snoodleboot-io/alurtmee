@@ -15,7 +15,7 @@ edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/snoodleboot-io/alurtmee"
-authors = ["Snoodleboot LLC <john@snoodleboot.com>"]
+authors = ["snoodleboot, LLC <john@snoodleboot.com>"]
 
 # Centralised dependency versions (ARD AD-8). Members opt in with `dep = { workspace = true }`.
 # Only deps actually consumed in Phase 0 are wired into crates; the rest are declared here so

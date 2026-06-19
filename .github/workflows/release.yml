@@ -74,14 +74,18 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           OUTPUT: "Alurtmee-${{ env.VERSION }}-x86_64.AppImage"
         run: |
-          cp assets/logo-128.png alurtmee.png
+          # Seed the AppDir with the AppStream metainfo so the AppImage carries publisher/
+          # license metadata too; linuxdeploy preserves existing AppDir contents.
+          mkdir -p AppDir/usr/share/metainfo
+          cp packaging/com.snoodleboot.Alurtmee.metainfo.xml AppDir/usr/share/metainfo/
+          cp assets/logo-128.png com.snoodleboot.Alurtmee.png
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --executable target/release/alurtmee \
-            --desktop-file packaging/alurtmee.desktop \
-            --icon-file alurtmee.png \
+            --desktop-file packaging/com.snoodleboot.Alurtmee.desktop \
+            --icon-file com.snoodleboot.Alurtmee.png \
             --output appimage
           # Move ONLY the built app image (named via $OUTPUT). A bare ./*.AppImage glob
           # would also sweep in linuxdeploy-x86_64.AppImage, the packaging tool downloaded

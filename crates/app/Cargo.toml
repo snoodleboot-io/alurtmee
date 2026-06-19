@@ -39,15 +39,18 @@ workspace = true
 # workspace root.
 [package.metadata.deb]
 name = "alurtmee"
-maintainer = "John Aven <john@snoodleboot.com>"
-copyright = "2026, Snoodleboot"
+maintainer = "Snoodleboot LLC <john@snoodleboot.com>"
+copyright = "2026 Snoodleboot LLC"
 license-file = ["../../LICENSE", "0"]
 extended-description = "A calm desktop app for keeping an eye on your GitHub pull requests: open PRs across the repos you pick, with reviews, CI status, classification, and desktop alerts."
 section = "utils"
 priority = "optional"
+# Reverse-DNS desktop + AppStream metainfo so software centres show the publisher,
+# license and description (not "Unknown publisher" / "License unknown").
 assets = [
     ["../../target/release/alurtmee", "usr/bin/", "755"],
-    ["../../packaging/alurtmee.desktop", "usr/share/applications/", "644"],
-    ["../../assets/logo-128.png", "usr/share/icons/hicolor/256x256/apps/alurtmee.png", "644"],
+    ["../../packaging/com.snoodleboot.Alurtmee.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/com.snoodleboot.Alurtmee.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../assets/logo-128.png", "usr/share/icons/hicolor/256x256/apps/com.snoodleboot.Alurtmee.png", "644"],
 ]
 depends = "$auto, libxkbcommon0, libwayland-client0, libgl1, gnome-keyring"

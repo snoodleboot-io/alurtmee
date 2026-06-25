@@ -39,6 +39,42 @@ scope for this ticket.
 | D2 | **Unsigned** — no Apple Developer account yet | Signing/notarization deferred; users right-click→Open past Gatekeeper. |
 | D3 | **Universal binary** (Intel + Apple Silicon) | Broadest Mac coverage; needs no signing, composes with D2. |
 | D4 | No new architecture — reuse ALRT-1 seams | `Notifier` trait + `keyring`/process abstractions already exist; this is conditional compilation, not redesign. No ARD required. |
+| D5 | **One platform façade owns all `cfg(target_os)`** | SOLID/DRY: a single `platform` module is the only place that branches on OS; call sites stay platform-agnostic. See §3a. |
+
+## 3a. SOLID + DRY design rules (binding for this ticket)
+
+The porting must not sprinkle `cfg(target_os = …)` across `main.rs`, `notifier.rs`, etc. There is
+currently **zero** `cfg` in the codebase — we keep it that way at the call sites by funnelling every
+OS branch through one seam.
+
+**New module `crates/app/src/platform/` — the single platform façade (SRP):**
+- `platform/mod.rs` exposes a **compile-time-selected** backend via a type alias, so static dispatch
+  and the existing generic `NotificationDispatcher<N>` are preserved (no `Box<dyn>`, no runtime cost):
+  ```rust
+  #[cfg(target_os = "linux")] pub type PlatformNotifier = crate::xdg_notifier::XdgNotifier;
+  #[cfg(target_os = "macos")] pub type PlatformNotifier = mac::MacNotifier;
+  pub fn notifier() -> PlatformNotifier { /* one construction site */ }
+  pub fn open_url(url: &str) { /* the ONLY xdg-open vs `open` branch */ }
+  ```
+- Each OS backend lives in its own submodule (`platform/mac.rs`, and the existing `xdg_notifier.rs`),
+  selected by one `#[cfg]` arm each. Adding Windows later = a new submodule + one arm, **no edits to
+  call sites** (OCP).
+
+**How each SOLID principle is honoured**
+- **SRP** — one module per OS backend; the façade's sole job is OS selection.
+- **OCP** — new platform = new impl behind the existing `Notifier` trait + a `cfg` arm in the façade;
+  `NotificationDispatcher`, `main.rs`, and the update loop are untouched.
+- **LSP** — every backend satisfies the same `Notifier` contract (`notify(summary, body)`), so they
+  are interchangeable by construction.
+- **DIP** — `main.rs` depends on the `Notifier` trait + the `platform` façade, never on `XdgNotifier`
+  / `MacNotifier` / `xdg-open` directly.
+
+**DRY checkpoints**
+- Exactly **one** `cfg`-branch per concern (notifier selection; browser-open command).
+- Keychain backend is selected **once** via target-conditional Cargo features (§4.1) — uniform
+  `keyring::Entry` call sites, no per-OS code.
+- CI build+test is a **single matrixed job** over `[ubuntu, macos]`, not two copy-pasted jobs (§5).
+- Reuse the existing `Notifier` test fake for both backends — no per-OS test scaffolding.
 
 ## 4. Platform-seam work
 
@@ -55,15 +91,22 @@ wrong; macOS uses the Security-framework backend (`apple-native`).
   is internal to the feature and not referenced in our code.
 
 ### 4.2 Open-in-browser — `crates/app/src/main.rs:454` (`open_url`)
-Hard-codes `xdg-open`. Make the command `cfg`-selected:
+Hard-codes `xdg-open`. **Move `open_url` into `platform::open_url`** (§3a) — the function leaves
+`main.rs` entirely and becomes the single `cfg`-branch for the launch command:
 - `cfg(target_os = "macos")` → `open`
 - else → `xdg-open`
 
+`main.rs` call sites change from `open_url(url)` to `platform::open_url(url)` — no `cfg` at the call
+site (DIP).
+
 ### 4.3 Notifications — `crates/app`
-`xdg_notifier.rs` (over `notify-rust`) is the only `Notifier` impl, selected in `main.rs`. Add a
-macOS path:
-- Wire a macOS `Notifier` (via `notify-rust`, which has a macOS backend) and select the impl by
-  `cfg(target_os)` where `XdgNotifier` is constructed.
+`xdg_notifier.rs` (over `notify-rust`) is the only `Notifier` impl; `main.rs:78,185` hard-code it as
+the concrete type in `NotificationDispatcher<XdgNotifier>`. Per §3a:
+- Add `platform/mac.rs` with `MacNotifier` implementing the **existing** `Notifier` trait (via
+  `notify-rust`'s macOS backend). `xdg_notifier.rs` is unchanged.
+- Replace the hard-coded `XdgNotifier` references with the `platform::PlatformNotifier` alias and
+  `platform::notifier()` construction — the dispatcher stays generic, `main.rs` stops naming any
+  concrete backend.
 - **Known limitation:** macOS only displays user notifications for a properly bundled, identified
   app. An unsigned, non-`.app` dev binary may suppress banners. The seam must compile and
   best-effort fire; full notification delivery is gated on the deferred `.app`-bundle/signing
@@ -74,7 +117,9 @@ No code change expected — the `directories` crate already resolves macOS paths
 (`~/Library/Application Support`). Verify the SQLite cache + config land there on macOS.
 
 ## 5. CI — `.github/workflows/ci.yml`
-Add a macOS job alongside the Linux one:
+**DRY:** extend the existing job into a `matrix.os: [ubuntu-latest, macos-14]` rather than copy-paste
+a second job — shared steps (checkout, toolchain, `cargo test --workspace`) stay single-sourced;
+only the universal-binary build is gated behind `if: runner.os == 'macOS'`.
 - Runner: `macos-14` (Apple Silicon). Add the `x86_64-apple-darwin` target via `rustup`.
 - Build both targets; `lipo -create -output alurtmee` to produce the universal binary; verify with
   `lipo -info` / `file`.
@@ -90,6 +135,9 @@ Add a macOS job alongside the Linux one:
 5. "Open PR on GitHub" launches the default browser via `open`.
 6. Linux build/test/release remain green and unchanged (no regression).
 7. README/docs document macOS dev-build steps and the unsigned-Gatekeeper caveat.
+8. **SOLID/DRY:** all `cfg(target_os)` lives in `crates/app/src/platform/` (+ the keychain Cargo
+   target tables); `grep -rn 'cfg(target_os' crates/app/src` outside `platform/` returns nothing,
+   and `main.rs` names no concrete notifier/opener backend.
 
 ## 7. Risks / open questions
 - **R1 — keyring `apple-native` feature name/behavior on v3.x.** Confirm exact feature flag and
@@ -102,9 +150,11 @@ Add a macOS job alongside the Linux one:
 
 ## 8. Task breakdown (suggested PRs)
 This is small enough for **one PR**, but can split if CI iteration is noisy:
-1. Seam ports (§4.1–4.3) + path verification (§4.4).
-2. macOS CI job + universal-binary build (§5).
-3. Docs (§6.7).
+1. **Platform façade** — add `crates/app/src/platform/` (mod + `mac.rs`), move `open_url` in,
+   introduce the `PlatformNotifier` alias, and repoint `main.rs` (§3a, §4.2–4.3).
+2. Keychain target-conditional Cargo features (§4.1) + path verification (§4.4).
+3. macOS CI matrix + universal-binary build (§5).
+4. Docs (§6.7).
 
 ## 9. Follow-up tickets (out of scope here)
 - **ALRT-26+ (suggested):** macOS `.app` bundle + `.dmg`, code signing + notarization, macOS

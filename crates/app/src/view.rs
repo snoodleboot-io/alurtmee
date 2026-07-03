@@ -595,6 +595,13 @@ impl Alurtmee {
             ));
         }
 
+        // Footer: the app's own version, so the running product always shows which release it is.
+        panel = panel.push(
+            text(format!("Alurtmee v{}", crate::APP_VERSION))
+                .size(11)
+                .color(s.muted),
+        );
+
         row![
             horizontal_space(),
             card(s, panel).width(Length::Fixed(560.0)),

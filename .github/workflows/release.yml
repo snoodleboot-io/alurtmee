@@ -1,10 +1,10 @@
-# Publish a release when a release-labelled PR is merged.
+# Publish a release when a release-labelled PR is merged (or on manual dispatch).
 #
-# `version-bump.yml` already bumped the VERSION file on the PR branch, so by the time the PR merges,
-# `main` holds the new version. The `macos` job builds an unsigned universal `.dmg` (ALRT-26); the
-# `release` job reads the version, packages a `.deb` + AppImage, pulls in the `.dmg`, writes
-# SHA256SUMS over all three, attaches a signed build-provenance attestation, and publishes a GitHub
-# Release with the `vX.Y.Z` tag — created by CI, so you never run `git tag`.
+# The version is NOT stored in the repo. The `version` job derives the next version from the latest
+# published GitHub Release and the requested bump (a PR label, or the workflow_dispatch input), then
+# `macos` + `release` consume it via job outputs and stamp it into Cargo.toml at build time. This
+# removes the old committed VERSION file and its version-bump race entirely (ALRT-27): there is no
+# bump commit to lose, and a collision guard refuses to re-publish an existing version.
 #
 # Nothing here pushes to `main`, so it is fully compatible with branch protection.
 name: release
@@ -12,9 +12,14 @@ name: release
 on:
   pull_request:
     types: [closed]
-  # Manual re-release: rebuild and publish the version currently on the dispatched
-  # ref (default: main's VERSION) without a labelled PR — e.g. to redo a release.
-  workflow_dispatch: {}
+  # Manual release: choose the bump relative to the latest published release.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump relative to the latest published release"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write # create the release + tag
@@ -26,17 +31,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build the unsigned universal (x86_64 + arm64) .dmg on macOS and hand it to `release` as an
-  # artifact. Same trigger guard and checkout ref as `release` so the two jobs package the exact same
-  # commit into one Release.
-  macos:
+  # Single source of truth for the version. Latest release tag + requested bump → next version. The
+  # trigger guard lives here; `macos`/`release` inherit it through `needs` (they skip if this skips).
+  version:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true && (
       contains(github.event.pull_request.labels.*.name, 'release') ||
       contains(github.event.pull_request.labels.*.name, 'release:major') ||
       contains(github.event.pull_request.labels.*.name, 'release:patch')))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+    steps:
+      - name: Compute next version from the latest release
+        id: compute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          DISPATCH_BUMP: ${{ inputs.bump }}
+          IS_MAJOR: ${{ contains(github.event.pull_request.labels.*.name, 'release:major') }}
+          IS_PATCH: ${{ contains(github.event.pull_request.labels.*.name, 'release:patch') }}
+        run: |
+          set -euo pipefail
+          # Base = the latest published release (vX.Y.Z). No releases yet → start from 0.0.0.
+          latest="$(gh release view -R "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+          base="${latest#v}"; base="${base:-0.0.0}"
+          IFS=. read -r MAJ MIN PAT <<< "$base"
+
+          if [ "$IS_DISPATCH" = "true" ]; then
+            bump="${DISPATCH_BUMP:-patch}"
+          elif [ "$IS_MAJOR" = "true" ]; then
+            bump="major"
+          elif [ "$IS_PATCH" = "true" ]; then
+            bump="patch"
+          else
+            bump="minor" # the plain `release` label
+          fi
+
+          case "$bump" in
+            major) next="$((MAJ + 1)).0.0" ;;
+            patch) next="${MAJ}.${MIN}.$((PAT + 1))" ;;
+            *)     next="${MAJ}.$((MIN + 1)).0" ;;
+          esac
+
+          # Never overwrite an existing release (guards against a stale/duplicate trigger).
+          if gh release view -R "$REPO" "v$next" >/dev/null 2>&1; then
+            echo "::error::v$next already exists — refusing to re-publish (base v$base, bump $bump)."
+            exit 1
+          fi
+
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Base v$base + $bump → v$next"
+
+  # Build the unsigned universal (x86_64 + arm64) .dmg on macOS and hand it to `release` as an
+  # artifact. Same checkout ref as `release` so both package the exact same commit.
+  macos:
+    needs: version
     runs-on: macos-14
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout the merge commit
         uses: actions/checkout@v4
@@ -44,8 +99,10 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Read version
-        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - name: Stamp the computed version into Cargo.toml
+        run: |
+          sed -i.bak "0,/^version = / s/^version = .*/version = \"$VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -77,14 +134,10 @@ jobs:
           path: dist/*.dmg
 
   release:
-    needs: macos
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true && (
-      contains(github.event.pull_request.labels.*.name, 'release') ||
-      contains(github.event.pull_request.labels.*.name, 'release:major') ||
-      contains(github.event.pull_request.labels.*.name, 'release:patch')))
+    needs: [version, macos]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout the merge commit
         uses: actions/checkout@v4
@@ -93,11 +146,10 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Read version
+      - name: Stamp the computed version into Cargo.toml
         run: |
-          v="$(cat VERSION)"
-          echo "VERSION=$v" >> "$GITHUB_ENV"
-          echo "Publishing v$v"
+          sed -i.bak "0,/^version = / s/^version = .*/version = \"$VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
 
       - name: Install system deps (Iced build + packaging)
         run: |

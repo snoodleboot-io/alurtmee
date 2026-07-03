@@ -47,6 +47,11 @@ use crate::pr_list_model::PrListModel;
 use crate::settings_model::SettingsModel;
 use crate::theme::{iced_theme, skin_index_by_name, Skin, DEFAULT_SKIN_INDEX, FONT_BODY, SKINS};
 
+/// The app's own version, baked in at compile time from the package version. Release builds carry
+/// the real `X.Y.Z` (stamped into `Cargo.toml` by the release workflow, ALRT-27); local/dev builds
+/// report the `0.0.0-dev` placeholder. This is how the product knows its own release.
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Default GitHub REST base URL (override via `ALURTMEE_GITHUB_BASE_URL` for the §10 pass / tests).
 const DEFAULT_GITHUB_BASE_URL: &str = "https://api.github.com";
 
@@ -550,8 +555,17 @@ fn data_db_path() -> Option<String> {
 }
 
 fn main() -> iced::Result {
+    // `alurtmee --version` / `-V`: report the baked-in version and exit before spinning up the UI.
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--version" || a == "-V")
+    {
+        println!("alurtmee {APP_VERSION}");
+        return Ok(());
+    }
+
     telemetry::init();
-    tracing::info!("starting alurtmee");
+    tracing::info!("starting alurtmee v{APP_VERSION}");
     iced::application("Alurtmee", Alurtmee::update, Alurtmee::view)
         .subscription(Alurtmee::subscription)
         .theme(Alurtmee::theme)

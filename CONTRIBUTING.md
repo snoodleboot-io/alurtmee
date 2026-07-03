@@ -59,19 +59,26 @@ cargo test --workspace
 
 ## How releases work
 
-You don't tag releases by hand. The version lives in the [`VERSION`](VERSION) file (semver), and a
-PR's label decides the bump:
+You don't tag releases by hand, and the version is **not stored in the repo**. At release time CI
+takes the latest published release and applies the bump your PR's label asks for:
 
-| Label | Bump | Example |
-|-------|------|---------|
-| `release` | minor | `0.3.0` → `0.4.0` |
-| `release:major` | major | `0.4.0` → `1.0.0` |
-| `release:patch` | patch | `0.4.0` → `0.4.1` |
+| Label | Bump | Example (latest `v0.3.0`) |
+|-------|------|---------------------------|
+| `release` | minor | `v0.4.0` |
+| `release:major` | major | `v1.0.0` |
+| `release:patch` | patch | `v0.3.1` |
 
-When a release-labelled PR gets the label, CI commits the version bump to that PR's branch; merging
-it then builds the `.deb` + AppImage, writes `SHA256SUMS`, attaches a build-provenance attestation,
-and publishes a [GitHub Release](https://github.com/snoodleboot-io/alurtmee/releases). A PR with no
-release label merges without cutting a release. See [`CHANGELOG.md`](CHANGELOG.md) for history.
+Just add one of those labels to your PR and merge it. The `release` workflow then derives the next
+version from the latest GitHub Release, stamps it into `Cargo.toml` for the build, packages the
+`.deb` + AppImage + macOS `.dmg`, writes `SHA256SUMS`, attaches a build-provenance attestation, and
+publishes a [GitHub Release](https://github.com/snoodleboot-io/alurtmee/releases) tagged `vX.Y.Z`.
+A PR with no release label merges without cutting a release.
+
+Because the version comes from the releases (not a committed file), there is no bump commit to race
+with the merge, and CI refuses to re-publish a version that already exists. To cut a release without
+a PR — or to redo one — run the **release** workflow manually (`workflow_dispatch`) and pick the
+bump. `Cargo.toml` carries a `0.0.0-dev` placeholder for local builds only. See
+[`CHANGELOG.md`](CHANGELOG.md) for history.
 
 ## Reporting bugs
 

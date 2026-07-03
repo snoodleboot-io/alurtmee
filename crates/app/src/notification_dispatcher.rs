@@ -13,8 +13,8 @@ use crate::notifier::Notifier;
 
 /// Dispatches CI alerts to a [`Notifier`], suppressing duplicates by [`CiAlert::dedupe_key`].
 ///
-/// Generic over the backend `N` so the Linux [`crate::xdg_notifier::XdgNotifier`] (or a test fake,
-/// or a future macOS/Windows backend) can be plugged in without changing this logic.
+/// Generic over the backend `N` so the [`crate::desktop_notifier::DesktopNotifier`] (or a test fake,
+/// or a future platform-native backend) can be plugged in without changing this logic.
 // integrated by the orchestrator in the poll-event handler
 #[allow(dead_code)]
 pub struct NotificationDispatcher<N: Notifier> {

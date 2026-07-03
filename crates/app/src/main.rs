@@ -17,8 +17,10 @@
 //! unit/acceptance tested. This `main` is the thin Iced shell, covered by the headless smoke test.
 
 mod demo;
+mod desktop_notifier;
 mod notification_dispatcher;
 mod notifier;
+mod platform;
 mod pr_list_model;
 mod settings_model;
 mod splash_frames;
@@ -26,7 +28,6 @@ mod telemetry;
 mod theme;
 mod view;
 mod widgets;
-mod xdg_notifier;
 
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
@@ -45,7 +46,6 @@ use crate::notification_dispatcher::NotificationDispatcher;
 use crate::pr_list_model::PrListModel;
 use crate::settings_model::SettingsModel;
 use crate::theme::{iced_theme, skin_index_by_name, Skin, DEFAULT_SKIN_INDEX, FONT_BODY, SKINS};
-use crate::xdg_notifier::XdgNotifier;
 
 /// Default GitHub REST base URL (override via `ALURTMEE_GITHUB_BASE_URL` for the §10 pass / tests).
 const DEFAULT_GITHUB_BASE_URL: &str = "https://api.github.com";
@@ -75,7 +75,7 @@ struct Alurtmee {
     keychain: Keychain,
     store: Store,
     base_url: String,
-    dispatcher: NotificationDispatcher<XdgNotifier>,
+    dispatcher: NotificationDispatcher<platform::PlatformNotifier>,
     focus_tx: watch::Sender<bool>,
     notifications_enabled: bool,
     /// Startup-animation tick (frame index, then fade), or `None` once the splash has finished.
@@ -182,7 +182,7 @@ impl Alurtmee {
             keychain,
             store,
             base_url,
-            dispatcher: NotificationDispatcher::new(XdgNotifier),
+            dispatcher: NotificationDispatcher::new(platform::notifier()),
             focus_tx,
             notifications_enabled,
             splash: Some(0),
@@ -332,7 +332,7 @@ impl Alurtmee {
                 Task::none()
             }
             Message::OpenUrl(url) => {
-                open_url(&url);
+                platform::open_url(&url);
                 Task::none()
             }
             Message::ShowSettings(show) => {
@@ -449,13 +449,6 @@ impl Alurtmee {
 }
 
 // ---- plumbing -------------------------------------------------------------
-
-/// Open a URL in the user's default browser (fire-and-forget via `xdg-open`).
-fn open_url(url: &str) {
-    if let Err(err) = std::process::Command::new("xdg-open").arg(url).spawn() {
-        tracing::warn!("could not open {url} in a browser: {err}");
-    }
-}
 
 fn open_store() -> Store {
     match open_store_opt() {

@@ -1,9 +1,10 @@
 # CI workflow for Alurtmee.
 #
-# Scope decision R2b: Linux-only v1. CI runs on ubuntu only for now, but the job
-# uses strategy.matrix.os so adding macOS/Windows later is a trivial, additive
-# change (extend the matrix list; the Linux-specific apt step is already gated
-# with `if: runner.os == 'Linux'` so future matrix entries skip it cleanly).
+# Runs on Linux and macOS via strategy.matrix.os. Shared steps (checkout, toolchain,
+# fmt, clippy, build, test) are single-sourced across both runners; the OS-specific
+# steps are gated with `if: runner.os == …` so each runner skips what doesn't apply.
+# macOS (ALRT-25) is a dev build: build + test + a universal (x86_64 + arm64) binary
+# artifact. It is unsigned; .app/.dmg packaging + signing are a later ticket.
 name: CI
 
 on:
@@ -15,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -42,6 +43,12 @@ jobs:
         with:
           components: clippy, rustfmt, llvm-tools-preview
 
+      # The macOS runner is Apple Silicon (arm64); add the Intel target so we can
+      # `lipo` a universal binary from both slices.
+      - name: Add x86_64 Apple target
+        if: runner.os == 'macOS'
+        run: rustup target add x86_64-apple-darwin
+
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
@@ -57,13 +64,21 @@ jobs:
       # Phase 1 introduces a live OS-keychain test (store::Keychain against the Secret Service).
       # Headless CI has no keyring, so we start a private D-Bus session and an unlocked
       # gnome-keyring `secrets` component for the test run (MASTER B3 / PHASE-1 §2 env gate).
-      - name: Test
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
         run: |
           dbus-run-session -- bash -c '
             echo "ci-keyring-pass" | gnome-keyring-daemon --unlock --components=secrets
             cargo test --workspace'
 
+      # macOS uses the login Keychain (apple-native), available and unlocked for the runner
+      # user, so the keychain test runs against it directly with no D-Bus shim.
+      - name: Test (macOS)
+        if: runner.os == 'macOS'
+        run: cargo test --workspace
+
       - name: Headless window smoke
+        if: runner.os == 'Linux'
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
@@ -73,7 +88,28 @@ jobs:
             sleep 4
             if kill -0 "$APP_PID" 2>/dev/null; then echo "window smoke: app alive after 4s — PASS"; kill "$APP_PID"; exit 0; else wait "$APP_PID"; echo "window smoke: app exited early — FAIL"; exit 1; fi'
 
+      # Universal (x86_64 + arm64) dev binary. Unsigned — users right-click → Open past
+      # Gatekeeper. Emitted as a CI artifact only; release packaging is a later ticket.
+      - name: Build universal binary
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --target x86_64-apple-darwin -p app --bin alurtmee
+          cargo build --release --target aarch64-apple-darwin -p app --bin alurtmee
+          lipo -create -output alurtmee \
+            target/x86_64-apple-darwin/release/alurtmee \
+            target/aarch64-apple-darwin/release/alurtmee
+          echo "== lipo -info ==" && lipo -info alurtmee
+          echo "== file ==" && file alurtmee
+
+      - name: Upload universal binary
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: alurtmee-macos-universal
+          path: alurtmee
+
       - name: Coverage (informational)
+        if: runner.os == 'Linux'
         continue-on-error: true
         run: |
           dbus-run-session -- bash -c '

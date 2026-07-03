@@ -47,18 +47,18 @@ The porting must not sprinkle `cfg(target_os = …)` across `main.rs`, `notifier
 currently **zero** `cfg` in the codebase — we keep it that way at the call sites by funnelling every
 OS branch through one seam.
 
-**New module `crates/app/src/platform/` — the single platform façade (SRP):**
-- `platform/mod.rs` exposes a **compile-time-selected** backend via a type alias, so static dispatch
-  and the existing generic `NotificationDispatcher<N>` are preserved (no `Box<dyn>`, no runtime cost):
+**New module `crates/app/src/platform.rs` — the single platform façade (SRP):**
+- Exposes a **compile-time-selected** notifier via a type alias, so static dispatch and the existing
+  generic `NotificationDispatcher<N>` are preserved (no `Box<dyn>`, no runtime cost), plus the one
+  OS-divergent command:
   ```rust
-  #[cfg(target_os = "linux")] pub type PlatformNotifier = crate::xdg_notifier::XdgNotifier;
-  #[cfg(target_os = "macos")] pub type PlatformNotifier = mac::MacNotifier;
-  pub fn notifier() -> PlatformNotifier { /* one construction site */ }
-  pub fn open_url(url: &str) { /* the ONLY xdg-open vs `open` branch */ }
+  pub type PlatformNotifier = crate::desktop_notifier::DesktopNotifier; // cross-platform today
+  pub fn notifier() -> PlatformNotifier { PlatformNotifier::default() }
+  pub fn open_url(url: &str) { /* the ONLY `open` vs xdg-open branch */ }
   ```
-- Each OS backend lives in its own submodule (`platform/mac.rs`, and the existing `xdg_notifier.rs`),
-  selected by one `#[cfg]` arm each. Adding Windows later = a new submodule + one arm, **no edits to
-  call sites** (OCP).
+- The notification backend is cross-platform (one `DesktopNotifier` over `notify-rust`; see §4.3), so
+  the alias needs no `#[cfg]` today. When a platform needs a bespoke backend, add one `#[cfg]` arm to
+  the alias here — **no edits to call sites** (OCP).
 
 **How each SOLID principle is honoured**
 - **SRP** — one module per OS backend; the façade's sole job is OS selection.
@@ -100,13 +100,18 @@ Hard-codes `xdg-open`. **Move `open_url` into `platform::open_url`** (§3a) — 
 site (DIP).
 
 ### 4.3 Notifications — `crates/app`
-`xdg_notifier.rs` (over `notify-rust`) is the only `Notifier` impl; `main.rs:78,185` hard-code it as
-the concrete type in `NotificationDispatcher<XdgNotifier>`. Per §3a:
-- Add `platform/mac.rs` with `MacNotifier` implementing the **existing** `Notifier` trait (via
-  `notify-rust`'s macOS backend). `xdg_notifier.rs` is unchanged.
-- Replace the hard-coded `XdgNotifier` references with the `platform::PlatformNotifier` alias and
-  `platform::notifier()` construction — the dispatcher stays generic, `main.rs` stops naming any
-  concrete backend.
+`xdg_notifier.rs` (over `notify-rust`) was the only `Notifier` impl; `main.rs:78,185` hard-coded it
+as the concrete type in `NotificationDispatcher<XdgNotifier>`.
+
+**DRY decision (revised during implementation):** the impl only uses `notify-rust`'s portable
+`summary`/`body`/`show` surface, and `notify-rust` is itself cross-platform (freedesktop D-Bus on
+Linux, `NSUserNotification`/`mac-notification-sys` on macOS). A separate `MacNotifier` would be a
+byte-for-byte copy — a DRY violation. So instead of two backends:
+- Rename `xdg_notifier.rs` → `desktop_notifier.rs`, `XdgNotifier` → `DesktopNotifier` (the "XDG" name
+  was Linux-specific and misleading); one cross-platform backend serves every target.
+- `platform::PlatformNotifier` aliases it and `platform::notifier()` constructs it; `main.rs` stops
+  naming any concrete backend. If a platform ever needs a bespoke backend, add a `#[cfg]` arm to the
+  alias in `platform.rs` — call sites and the dispatcher never change (OCP).
 - **Known limitation:** macOS only displays user notifications for a properly bundled, identified
   app. An unsigned, non-`.app` dev binary may suppress banners. The seam must compile and
   best-effort fire; full notification delivery is gated on the deferred `.app`-bundle/signing
@@ -135,8 +140,8 @@ only the universal-binary build is gated behind `if: runner.os == 'macOS'`.
 5. "Open PR on GitHub" launches the default browser via `open`.
 6. Linux build/test/release remain green and unchanged (no regression).
 7. README/docs document macOS dev-build steps and the unsigned-Gatekeeper caveat.
-8. **SOLID/DRY:** all `cfg(target_os)` lives in `crates/app/src/platform/` (+ the keychain Cargo
-   target tables); `grep -rn 'cfg(target_os' crates/app/src` outside `platform/` returns nothing,
+8. **SOLID/DRY:** all `cfg(target_os)` lives in `crates/app/src/platform.rs` (+ the keychain Cargo
+   target tables); `grep -rn 'cfg(target_os' crates/app/src` outside `platform.rs` returns nothing,
    and `main.rs` names no concrete notifier/opener backend.
 
 ## 7. Risks / open questions
@@ -150,8 +155,9 @@ only the universal-binary build is gated behind `if: runner.os == 'macOS'`.
 
 ## 8. Task breakdown (suggested PRs)
 This is small enough for **one PR**, but can split if CI iteration is noisy:
-1. **Platform façade** — add `crates/app/src/platform/` (mod + `mac.rs`), move `open_url` in,
-   introduce the `PlatformNotifier` alias, and repoint `main.rs` (§3a, §4.2–4.3).
+1. **Platform façade** — add `crates/app/src/platform.rs`, move `open_url` in, rename the notifier to
+   the cross-platform `DesktopNotifier`, introduce the `PlatformNotifier` alias, and repoint
+   `main.rs` (§3a, §4.2–4.3).
 2. Keychain target-conditional Cargo features (§4.1) + path verification (§4.4).
 3. macOS CI matrix + universal-binary build (§5).
 4. Docs (§6.7).

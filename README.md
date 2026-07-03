@@ -66,19 +66,27 @@ gh attestation verify Alurtmee.AppImage \
 
 ### Option C — build from source
 
-You'll need [Rust](https://rustup.rs) and a few system libraries:
+You'll need [Rust](https://rustup.rs), then:
 
 ```bash
-# Debian / Ubuntu
-sudo apt-get install -y \
-  libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
-  libgl1-mesa-dev mesa-vulkan-drivers \
-  gnome-keyring dbus-x11
-
 git clone https://github.com/snoodleboot-io/alurtmee.git
 cd alurtmee
 cargo run -p app
 ```
+
+On **Debian / Ubuntu** install a few system libraries first:
+
+```bash
+sudo apt-get install -y \
+  libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
+  libgl1-mesa-dev mesa-vulkan-drivers \
+  gnome-keyring dbus-x11
+```
+
+On **macOS** (dev build) no extra packages are needed — the token lives in the login
+Keychain and notifications use the native service. The dev binary is **unsigned**, so the
+first launch is blocked by Gatekeeper: **right-click the app → Open** (or run the `cargo`
+binary directly). A signed, notarized `.dmg` is planned for a later release.
 
 ## Getting connected
 

@@ -1,9 +1,10 @@
 # Publish a release when a release-labelled PR is merged.
 #
 # `version-bump.yml` already bumped the VERSION file on the PR branch, so by the time the PR merges,
-# `main` holds the new version. This job reads it, builds a release binary, packages a `.deb` and an
-# AppImage, writes SHA256SUMS, attaches a signed build-provenance attestation, and publishes a
-# GitHub Release with the `vX.Y.Z` tag — created by CI, so you never run `git tag`.
+# `main` holds the new version. The `macos` job builds an unsigned universal `.dmg` (ALRT-26); the
+# `release` job reads the version, packages a `.deb` + AppImage, pulls in the `.dmg`, writes
+# SHA256SUMS over all three, attaches a signed build-provenance attestation, and publishes a GitHub
+# Release with the `vX.Y.Z` tag — created by CI, so you never run `git tag`.
 #
 # Nothing here pushes to `main`, so it is fully compatible with branch protection.
 name: release
@@ -25,7 +26,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Build the unsigned universal (x86_64 + arm64) .dmg on macOS and hand it to `release` as an
+  # artifact. Same trigger guard and checkout ref as `release` so the two jobs package the exact same
+  # commit into one Release.
+  macos:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true && (
+      contains(github.event.pull_request.labels.*.name, 'release') ||
+      contains(github.event.pull_request.labels.*.name, 'release:major') ||
+      contains(github.event.pull_request.labels.*.name, 'release:patch')))
+    runs-on: macos-14
+    steps:
+      - name: Checkout the merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Read version
+        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # macos-14 is Apple Silicon; add the Intel target so we can lipo a universal binary.
+      - name: Add x86_64 Apple target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build universal binary
+        run: |
+          cargo build --release --target x86_64-apple-darwin -p app --bin alurtmee
+          cargo build --release --target aarch64-apple-darwin -p app --bin alurtmee
+          mkdir -p dist-bin
+          lipo -create -output dist-bin/alurtmee \
+            target/x86_64-apple-darwin/release/alurtmee \
+            target/aarch64-apple-darwin/release/alurtmee
+          lipo -info dist-bin/alurtmee
+
+      - name: Package .dmg
+        run: packaging/macos/make-dmg.sh "$VERSION" dist-bin/alurtmee dist
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*.dmg
+
   release:
+    needs: macos
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.merged == true && (
@@ -92,10 +144,18 @@ jobs:
           # above, leaking it into the release and SHA256SUMS.
           mv "$OUTPUT" dist/
 
+      # Pull the universal .dmg built by the `macos` job into dist/ so it joins the checksums,
+      # attestation, and the published Release.
+      - name: Download macOS .dmg
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-macos
+          path: dist
+
       - name: Generate SHA256SUMS
         run: |
           cd dist
-          sha256sum ./*.AppImage ./*.deb > SHA256SUMS
+          sha256sum ./*.AppImage ./*.deb ./*.dmg > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest build provenance
@@ -104,6 +164,7 @@ jobs:
           subject-path: |
             dist/*.AppImage
             dist/*.deb
+            dist/*.dmg
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -114,5 +175,6 @@ jobs:
           files: |
             dist/*.AppImage
             dist/*.deb
+            dist/*.dmg
             dist/SHA256SUMS
           generate_release_notes: true

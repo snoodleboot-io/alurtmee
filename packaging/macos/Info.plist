@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS app-bundle metadata for Alurtmee. `__VERSION__` is substituted from the VERSION file by
+  packaging/macos/make-dmg.sh at build time. The bundle is unsigned (ALRT-26); a signed/notarized
+  bundle is a later ticket.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleName</key>
+  <string>Alurtmee</string>
+  <key>CFBundleDisplayName</key>
+  <string>Alurtmee</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.snoodleboot.Alurtmee</string>
+  <key>CFBundleExecutable</key>
+  <string>alurtmee</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleVersion</key>
+  <string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key>
+  <string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>© 2026 snoodleboot, LLC</string>
+</dict>
+</plist>

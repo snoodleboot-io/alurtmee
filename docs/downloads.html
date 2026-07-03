@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Download Alurtmee — current &amp; previous versions</title>
-  <meta name="description" content="Download Alurtmee for Linux — AppImage or .deb. Always shows the current release plus the last four versions, pulled live from GitHub." />
+  <meta name="description" content="Download Alurtmee for Linux (AppImage or .deb) or macOS (universal .dmg). Always shows the current release plus the last four versions, pulled live from GitHub." />
   <meta name="theme-color" content="#030208" />
   <link rel="icon" type="image/png" href="assets/img/logo-128.png" />
   <link rel="apple-touch-icon" href="assets/img/logo-128.png" />
 
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Download Alurtmee" />
-  <meta property="og:description" content="Grab the current release plus the last four versions — AppImage or .deb, for Linux." />
+  <meta property="og:description" content="Grab the current release plus the last four versions — Linux (AppImage or .deb) and macOS (universal .dmg)." />
   <meta property="og:image" content="assets/img/logo.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -65,7 +65,7 @@
     <section class="dl-hero wrap">
       <span class="eyebrow" style="justify-content:center">Downloads</span>
       <h1>Grab <span class="gradient-text">Alurtmee</span>.</h1>
-      <p class="lede" style="margin-inline:auto">Runs on <b>Linux</b> today — macOS and Windows are planned. The list below is pulled live from GitHub, so it always shows the current release and the last four.</p>
+      <p class="lede" style="margin-inline:auto">Runs on <b>Linux</b> and <b>macOS</b> today — Windows is planned. The list below is pulled live from GitHub, so it always shows the current release and the last four.</p>
 
       <!-- Current release (filled by downloads.js) -->
       <div class="dl-latest" id="dl-latest" aria-live="polite">
@@ -78,11 +78,15 @@
       <!-- Requirements + verify -->
       <div class="dl-note">
         <strong style="color:var(--text)">Before you run it:</strong>
-        Alurtmee renders with your GPU and stores your token in the system keychain, so you'll need
-        GPU drivers (<code>mesa-vulkan-drivers</code>) and a Secret Service daemon (<code>gnome-keyring</code>) present.
-        The <strong style="color:var(--text)">AppImage</strong> needs no install — <code>chmod +x</code> and run.
-        The <strong style="color:var(--text)">.deb</strong> pulls in its runtime dependencies via
+        Alurtmee renders with your GPU and stores your token in the system keychain.
+        On <strong style="color:var(--text)">Linux</strong> you'll need GPU drivers (<code>mesa-vulkan-drivers</code>)
+        and a Secret Service daemon (<code>gnome-keyring</code>) present: the
+        <strong style="color:var(--text)">AppImage</strong> needs no install (<code>chmod +x</code> and run), and the
+        <strong style="color:var(--text)">.deb</strong> pulls in its dependencies via
         <code>sudo apt install ./alurtmee_*_amd64.deb</code>.
+        On <strong style="color:var(--text)">macOS</strong> the universal <strong style="color:var(--text)">.dmg</strong>
+        works on Intel and Apple Silicon — open it and drag Alurtmee to Applications. It's unsigned for now,
+        so the first launch needs a <strong style="color:var(--text)">right-click → Open</strong> to get past Gatekeeper.
         First look? Launch with <code>ALURTMEE_DEMO=1</code> for sample data and no network.
       </div>
     </section>
@@ -137,7 +141,7 @@
       </div>
       <div class="foot-bottom">
         <span>© <span data-year>2026</span> Alurtmee · Apache-2.0</span>
-        <span>Runs on Linux today · macOS &amp; Windows planned</span>
+        <span>Runs on Linux &amp; macOS · Windows planned</span>
       </div>
     </div>
   </footer>

@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-25
+**Next free ID:** ALRT-26
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|
@@ -32,3 +32,4 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-22 | Open a PR on GitHub from the detail pane (xdg-open) | `feat/ALRT-22-open-pr-link` | Merged |
 | ALRT-23 | GitHub Pages marketing + downloads site | `feat/ALRT-23-github-pages-site` | Merged |
 | ALRT-24 | Pure-Rust zbus keychain — drop C libdbus link | `feat/ALRT-24-keyring-zbus` | Merged |
+| ALRT-25 | macOS dev build — port platform seams (keychain/notifier/open-URL), universal binary, macOS CI (unsigned; signing deferred) | `feat/ALRT-25-macos-build` | Planning |

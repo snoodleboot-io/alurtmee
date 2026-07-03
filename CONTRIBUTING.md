@@ -4,21 +4,28 @@ Thanks for helping out! Bug reports, ideas, and PRs are all welcome.
 
 ## Getting set up
 
-Alurtmee is a Rust (Iced) desktop app, Linux for now. You'll need [Rust](https://rustup.rs) and a
-few system libraries:
+Alurtmee is a Rust (Iced) desktop app. Linux is the released target; macOS has a dev build
+(unsigned; see below). You'll need [Rust](https://rustup.rs):
 
 ```bash
-# Debian / Ubuntu
-sudo apt-get install -y \
-  libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
-  libgl1-mesa-dev mesa-vulkan-drivers libdbus-1-dev \
-  gnome-keyring dbus-x11
-
 cargo run -p app                 # run it
 ALURTMEE_DEMO=1 cargo run -p app # run with sample data, no token/network
 ```
 
-`libdbus-1-dev` is needed because the keychain backend builds against the C `libdbus`.
+On **Debian / Ubuntu** install the system libraries first:
+
+```bash
+sudo apt-get install -y \
+  libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev libx11-dev \
+  libgl1-mesa-dev mesa-vulkan-drivers libdbus-1-dev \
+  gnome-keyring dbus-x11
+```
+
+On **macOS** no extra packages are needed. Every OS-specific choice (keychain backend,
+notification backend, open-in-browser command) is funnelled through `crates/app/src/platform.rs`
+plus the target-conditional `keyring` features in `crates/store/Cargo.toml` — add a platform there,
+not with `cfg` scattered across the code. The macOS binary is unsigned; a `.app`/`.dmg` with signing
++ notarization is a later ticket.
 
 ## Workspace layout
 

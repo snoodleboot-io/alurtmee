@@ -10,6 +10,7 @@ const MAX_PREVIOUS = 4;
 const ICONS = {
   appimage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M5 21h14"/></svg>`,
   deb: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="m3 8 9 5 9-5"/><path d="M3 8v8l9 5 9-5V8"/></svg>`,
+  dmg: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M16.365 1.43c0 1.14-.417 2.2-1.11 2.98-.744.84-1.964 1.49-3.11 1.4-.135-1.11.42-2.29 1.09-3.02.75-.83 2.05-1.44 3.13-1.36ZM20.5 17.02c-.55 1.27-.82 1.84-1.53 2.96-.99 1.57-2.39 3.53-4.12 3.54-1.54.02-1.94-1-4.03-.99-2.09.01-2.53 1.01-4.07.99-1.73-.02-3.05-1.78-4.04-3.35C-.02 15.9-.31 10.79 1.36 8.07c1.19-1.94 3.07-3.08 4.83-3.08 1.8 0 2.93 1 4.42 1 1.44 0 2.32-1 4.4-1 1.57 0 3.24.86 4.42 2.34-3.89 2.13-3.26 7.68 1.07 9.69Z"/></svg>`,
   sum: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 5-3.5 7.5-8.5 9C7.5 19.5 4 17 4 12V6l8-3 8 3Z"/></svg>`,
   file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>`,
 };
@@ -32,12 +33,13 @@ function classifyAsset(a) {
   const n = a.name.toLowerCase();
   if (n.endsWith(".appimage")) return { kind: "appimage", label: "AppImage", sub: "Portable · Linux x86-64", icon: ICONS.appimage };
   if (n.endsWith(".deb")) return { kind: "deb", label: "Debian / Ubuntu", sub: ".deb package", icon: ICONS.deb };
+  if (n.endsWith(".dmg")) return { kind: "dmg", label: "macOS", sub: "Universal · Intel + Apple Silicon", icon: ICONS.dmg };
   if (n.includes("sha256") || n.includes("sum")) return { kind: "sum", label: "SHA256SUMS", sub: "Verify integrity", icon: ICONS.sum };
   return { kind: "file", label: a.name, sub: "Asset", icon: ICONS.file };
 }
 
-// AppImage and .deb first, then checksums, then the rest.
-const ASSET_ORDER = { appimage: 0, deb: 1, sum: 2, file: 3 };
+// AppImage and .deb first, then the macOS .dmg, then checksums, then the rest.
+const ASSET_ORDER = { appimage: 0, deb: 1, dmg: 2, sum: 3, file: 4 };
 
 function assetButton(a) {
   const c = classifyAsset(a);

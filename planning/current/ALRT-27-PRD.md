@@ -30,6 +30,15 @@ The version is **derived from what is released**, not stored in the repo. No bum
   Info.plist all match. The trigger guard lives only on `version`; the others inherit it via `needs`
   (DRY — one guard, one version computation shared by both).
 
+### The product knows its own version
+Deriving the version at release is pointless if the app can't report it. The version is now **baked
+into the binary** and surfaced:
+- `pub(crate) const APP_VERSION = env!("CARGO_PKG_VERSION")` — compile-time, so it reflects whatever
+  the release workflow stamped (real `X.Y.Z` for releases; `0.0.0-dev` for local builds).
+- `alurtmee --version` / `-V` prints it and exits before the UI starts.
+- The Settings panel shows an `Alurtmee vX.Y.Z` footer, so the running product always displays which
+  release it is.
+
 ## 4. Why this is better
 - **No race:** nothing is committed at release time; the version is computed from immutable release
   history at the moment of publish.
@@ -44,6 +53,8 @@ The version is **derived from what is released**, not stored in the repo. No bum
 3. Re-triggering against an existing version **fails** rather than mutating a release.
 4. Published `.deb`/AppImage/`.dmg` all report the derived version.
 5. `workflow_dispatch` can cut a release with a chosen bump and no PR.
+6. The **product reports its own version**: `alurtmee --version` prints it, and the Settings footer
+   shows it. Release builds show the stamped `X.Y.Z`; dev builds show `0.0.0-dev`.
 
 ## 6. Follow-up
 - Optional: fully-automatic bump inferred from Conventional Commits (`feat`→minor, `fix`→patch,

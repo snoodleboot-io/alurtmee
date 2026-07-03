@@ -34,4 +34,4 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-24 | Pure-Rust zbus keychain — drop C libdbus link | `feat/ALRT-24-keyring-zbus` | Merged |
 | ALRT-25 | macOS dev build — port platform seams (keychain/notifier/open-URL), universal binary, macOS CI (unsigned; signing deferred) | `feat/ALRT-25-macos-build` | Merged |
 | ALRT-26 | macOS release asset — package unsigned universal `.app`/`.dmg` in the release pipeline; advertise macOS on the downloads site | `feat/ALRT-26-macos-release` | Merged |
-| ALRT-27 | Tag-derived versioning — drop the committed VERSION file + version-bump race; derive the next version from the latest published release at release time | `feat/ALRT-27-tag-derived-versioning` | In Review |
+| ALRT-27 | Release-derived versioning — drop the committed VERSION file + version-bump race; derive the next version from the latest published release; bake it into the binary so the product reports its own version (`--version` + Settings footer) | `feat/ALRT-27-tag-derived-versioning` | In Review |

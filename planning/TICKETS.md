@@ -4,7 +4,7 @@ This project has no external issue tracker. We use a lightweight local scheme, *
 as the source of "real" ticket IDs required by the branch-naming convention. Increment the
 counter for each new ticket; record it here before creating its branch.
 
-**Next free ID:** ALRT-27
+**Next free ID:** ALRT-28
 
 | Ticket | Title | Branch | Status |
 |--------|-------|--------|--------|
@@ -33,4 +33,5 @@ counter for each new ticket; record it here before creating its branch.
 | ALRT-23 | GitHub Pages marketing + downloads site | `feat/ALRT-23-github-pages-site` | Merged |
 | ALRT-24 | Pure-Rust zbus keychain — drop C libdbus link | `feat/ALRT-24-keyring-zbus` | Merged |
 | ALRT-25 | macOS dev build — port platform seams (keychain/notifier/open-URL), universal binary, macOS CI (unsigned; signing deferred) | `feat/ALRT-25-macos-build` | Merged |
-| ALRT-26 | macOS release asset — package unsigned universal `.app`/`.dmg` in the release pipeline; advertise macOS on the downloads site | `feat/ALRT-26-macos-release` | In Review |
+| ALRT-26 | macOS release asset — package unsigned universal `.app`/`.dmg` in the release pipeline; advertise macOS on the downloads site | `feat/ALRT-26-macos-release` | Merged |
+| ALRT-27 | Tag-derived versioning — drop the committed VERSION file + version-bump race; derive the next version from the latest published release at release time | `feat/ALRT-27-tag-derived-versioning` | In Review |

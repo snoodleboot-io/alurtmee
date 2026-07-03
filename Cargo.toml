@@ -10,7 +10,10 @@ members = [
 
 # Shared metadata applied to every workspace member via `package.*.workspace = true`.
 [workspace.package]
-version = "0.1.0"
+# Non-authoritative dev placeholder. The RELEASE version is not stored in the repo — it is derived
+# from the latest published GitHub Release at release time and stamped into this field by CI
+# (`.github/workflows/release.yml`, ALRT-27). Local/dev builds just report `0.0.0-dev`.
+version = "0.0.0-dev"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"

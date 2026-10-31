@@ -89,7 +89,7 @@ jobs:
   # artifact. Same checkout ref as `release` so both package the exact same commit.
   macos:
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -107,7 +107,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # macos-14 is Apple Silicon; add the Intel target so we can lipo a universal binary.
+      # macos-15 is Apple Silicon; add the Intel target so we can lipo a universal binary.
       - name: Add x86_64 Apple target
         run: rustup target add x86_64-apple-darwin
 
